@@ -81,6 +81,11 @@ env:
   DATADOG_API_KEY: ${{ secrets.DATA_DOG_API_KEY }}
   NEXT_JUNIT_TEST_REPORT: 'true'
   DD_ENV: 'ci'
+  DD_CI_JOB_NAME: ${{ inputs.stepName }}
+  # Better than Datadog's default (e.g. https://github.com/vercel/next.js/commit/3dd3d19ba63c7ca790f3bf39e0e15152b597547c/checks)
+  # Job id is not provided by GitHub. Using workflow url as a fallback.
+  # We could derived the job id from GH API response but this is just more network slowness.
+  DD_CI_JOB_URL: https://github.com/${{  github.repository }}/actions/runs/${{ github.run_id }}/attempts/${{ github.run_attempt }}
   TEST_TIMINGS_TOKEN: ${{ secrets.TEST_TIMINGS_TOKEN }}
   NEXT_TEST_JOB: 1
   VERCEL_TEST_TOKEN: ${{ secrets.VERCEL_TEST_TOKEN }}
@@ -213,18 +218,22 @@ jobs:
           name: webpack bundle analysis stats-${{ steps.var.outputs.input_step_key }}
           path: packages/next/dist/compiled/next-server/report.*.html
 
-      - name: Upload test report artifacts
-        uses: actions/upload-artifact@v4
+      - name: Upload test report to datadog
         if: ${{ inputs.afterBuild && always() }}
-        with:
-          name: test-reports-${{ steps.var.outputs.input_step_key }}
-          path: |
-            test/test-junit-report
-            test/turbopack-test-junit-report
-          if-no-files-found: ignore
+        run: |
+          echo "DD_CI_JOB_NAME: ${{ env.DD_CI_JOB_NAME }}"
+          echo "DD_CI_JOB_URL: ${{ env.DD_CI_JOB_URL }}"
+          if [ -d ./test/test-junit-report ]; then
+            # Add a `test.type` tag to distinguish between turbopack and next.js runs
+            npx @datadog/datadog-ci@2.45.1 junit upload --service nextjs --tags test.type:nextjs ./test/test-junit-report
+          fi
 
-      # upload playwright snapshots from failed tests
-      - name: Upload test report artifacts
+          if [ -d ./test/turbopack-test-junit-report ]; then
+            # Add a `test.type` tag to distinguish between turbopack and next.js runs
+            npx @datadog/datadog-ci@2.45.1 junit upload --service nextjs --tags test.type:turbopack ./test/turbopack-test-junit-report
+          fi
+
+      - name: Upload Playwright Snapshots
         uses: actions/upload-artifact@v4
         if: ${{ inputs.afterBuild && always() }}
         with:
