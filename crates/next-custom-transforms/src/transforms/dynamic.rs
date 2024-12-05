@@ -674,11 +674,11 @@ fn rel_filename(base: Option<&Path>, file: &FileName) -> String {
 }
 
 fn with_chunking_type(chunking_type: &str) -> Box<ObjectLit> {
-    with_clause(&[("chunking-type", chunking_type)])
+    with_clause(&[("turbopack-chunking-type", chunking_type)])
 }
 
 fn with_transition(transition_name: &str) -> Box<ObjectLit> {
-    with_clause(&[("transition", transition_name)])
+    with_clause(&[("turbopack-transition", transition_name)])
 }
 
 fn with_clause<'a>(entries: impl IntoIterator<Item = &'a (&'a str, &'a str)>) -> Box<ObjectLit> {
