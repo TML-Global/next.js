@@ -1,8 +1,9 @@
-use anyhow::Result;
+use anyhow::{bail, Result};
 use turbo_rcstr::RcStr;
 use turbo_tasks::{ResolvedVc, Value, Vc};
 use turbopack::{transition::Transition, ModuleAssetContext};
 use turbopack_core::{context::ProcessResult, reference_type::ReferenceType, source::Source};
+use turbopack_ecmascript::chunk::EcmascriptChunkPlaceable;
 
 use super::NextDynamicEntryModule;
 
@@ -52,11 +53,20 @@ impl Transition for NextDynamicTransition {
             .try_into_module()
             .await?
         {
-            Some(client_module) => ProcessResult::Module(ResolvedVc::upcast(
-                NextDynamicEntryModule::new(*client_module)
-                    .to_resolved()
-                    .await?,
-            )),
+            Some(client_module) => {
+                let Some(client_module) =
+                    ResolvedVc::try_sidecast::<Box<dyn EcmascriptChunkPlaceable>>(client_module)
+                        .await?
+                else {
+                    bail!("not an ecmascript client_module");
+                };
+
+                ProcessResult::Module(ResolvedVc::upcast(
+                    NextDynamicEntryModule::new(*client_module)
+                        .to_resolved()
+                        .await?,
+                ))
+            }
             None => ProcessResult::Ignore,
         }
         .cell())
