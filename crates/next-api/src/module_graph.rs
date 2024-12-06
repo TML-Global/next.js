@@ -254,8 +254,9 @@ impl SingleModuleGraph {
         {
             let _span = tracing::info_span!("build module graph").entered();
             for (parent, current) in children_modules_iter.into_breadth_first_edges() {
-                let parent_idx =
-                    parent.map(|parent| *modules.get(&parent.module().unwrap()).unwrap());
+                let parent_idx = parent
+                    .clone()
+                    .map(|parent| *modules.get(&parent.module().unwrap()).unwrap());
 
                 match current {
                     SingleModuleGraphBuilderNode::Module {
@@ -263,6 +264,16 @@ impl SingleModuleGraph {
                         layer,
                         ident: _,
                     } => {
+                        // println!(
+                        //     "parent: {:?}, current: {:?}",
+                        //     match &parent {
+                        //         Some(SingleModuleGraphBuilderNode::Module { ident, .. }) =>
+                        //             ident.to_string(),
+                        //         _ => "".to_string(),
+                        //     },
+                        //     ident
+                        // );
+
                         if let Some(idx) = modules.get(&module) {
                             if let Some(parent_idx) = parent_idx {
                                 graph.add_edge(parent_idx, *idx, ());

@@ -129,6 +129,7 @@ fn next_dynamic_fixture(input: PathBuf) {
                 false,
                 false,
                 NextDynamicMode::Turbopack {
+                    dynamic_client_transition_name: "next-client-dynamic".to_string(),
                     dynamic_transition_name: "next-dynamic".to_string(),
                 },
                 FileName::Real(PathBuf::from("/some-project/src/some-file.js")).into(),
@@ -148,6 +149,7 @@ fn next_dynamic_fixture(input: PathBuf) {
                 false,
                 false,
                 NextDynamicMode::Turbopack {
+                    dynamic_client_transition_name: "next-client-dynamic".to_string(),
                     dynamic_transition_name: "next-dynamic".to_string(),
                 },
                 FileName::Real(PathBuf::from("/some-project/src/some-file.js")).into(),
@@ -167,6 +169,7 @@ fn next_dynamic_fixture(input: PathBuf) {
                 false,
                 false,
                 NextDynamicMode::Turbopack {
+                    dynamic_client_transition_name: "next-client-dynamic".to_string(),
                     dynamic_transition_name: "next-dynamic".to_string(),
                 },
                 FileName::Real(PathBuf::from("/some-project/src/some-file.js")).into(),
@@ -272,6 +275,7 @@ fn app_dir_next_dynamic_fixture(input: PathBuf) {
                 true,
                 false,
                 NextDynamicMode::Turbopack {
+                    dynamic_client_transition_name: "next-client-dynamic".to_string(),
                     dynamic_transition_name: "next-dynamic".to_string(),
                 },
                 FileName::Real(PathBuf::from("/some-project/src/some-file.js")).into(),
@@ -291,6 +295,7 @@ fn app_dir_next_dynamic_fixture(input: PathBuf) {
                 true,
                 false,
                 NextDynamicMode::Turbopack {
+                    dynamic_client_transition_name: "next-client-dynamic".to_string(),
                     dynamic_transition_name: "next-dynamic".to_string(),
                 },
                 FileName::Real(PathBuf::from("/some-project/src/some-file.js")).into(),
@@ -310,6 +315,7 @@ fn app_dir_next_dynamic_fixture(input: PathBuf) {
                 true,
                 false,
                 NextDynamicMode::Turbopack {
+                    dynamic_client_transition_name: "next-client-dynamic".to_string(),
                     dynamic_transition_name: "next-dynamic".to_string(),
                 },
                 FileName::Real(PathBuf::from("/some-project/src/some-file.js")).into(),
@@ -329,6 +335,7 @@ fn app_dir_next_dynamic_fixture(input: PathBuf) {
                 false,
                 false,
                 NextDynamicMode::Turbopack {
+                    dynamic_client_transition_name: "next-client-dynamic".to_string(),
                     dynamic_transition_name: "next-dynamic".to_string(),
                 },
                 FileName::Real(PathBuf::from("/some-project/src/some-file.js")).into(),

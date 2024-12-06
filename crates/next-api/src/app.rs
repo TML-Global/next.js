@@ -321,8 +321,12 @@ impl AppProject {
             ),
             (
                 "next-dynamic".into(),
+                ResolvedVc::upcast(NextDynamicTransition::new_marker().to_resolved().await?),
+            ),
+            (
+                "next-dynamic-client".into(),
                 ResolvedVc::upcast(
-                    NextDynamicTransition::new(Vc::upcast(self.client_transition()))
+                    NextDynamicTransition::new_client(Vc::upcast(self.client_transition()))
                         .to_resolved()
                         .await?,
                 ),
@@ -370,8 +374,12 @@ impl AppProject {
             ),
             (
                 "next-dynamic".into(),
+                ResolvedVc::upcast(NextDynamicTransition::new_marker().to_resolved().await?),
+            ),
+            (
+                "next-dynamic-client".into(),
                 ResolvedVc::upcast(
-                    NextDynamicTransition::new(Vc::upcast(self.client_transition()))
+                    NextDynamicTransition::new_client(Vc::upcast(self.client_transition()))
                         .to_resolved()
                         .await?,
                 ),
@@ -417,8 +425,12 @@ impl AppProject {
             ),
             (
                 "next-dynamic".into(),
+                ResolvedVc::upcast(NextDynamicTransition::new_marker().to_resolved().await?),
+            ),
+            (
+                "next-dynamic-client".into(),
                 ResolvedVc::upcast(
-                    NextDynamicTransition::new(Vc::upcast(self.client_transition()))
+                    NextDynamicTransition::new_client(Vc::upcast(self.client_transition()))
                         .to_resolved()
                         .await?,
                 ),
@@ -463,8 +475,12 @@ impl AppProject {
             ),
             (
                 "next-dynamic".into(),
+                ResolvedVc::upcast(NextDynamicTransition::new_marker().to_resolved().await?),
+            ),
+            (
+                "next-dynamic-client".into(),
                 ResolvedVc::upcast(
-                    NextDynamicTransition::new(Vc::upcast(self.client_transition()))
+                    NextDynamicTransition::new_client(Vc::upcast(self.client_transition()))
                         .to_resolved()
                         .await?,
                 ),
@@ -498,14 +514,30 @@ impl AppProject {
     }
 
     #[turbo_tasks::function]
-    fn client_module_context(self: Vc<Self>) -> Vc<ModuleAssetContext> {
-        ModuleAssetContext::new(
-            Default::default(),
+    async fn client_module_context(self: Vc<Self>) -> Result<Vc<ModuleAssetContext>> {
+        let transitions = [
+            (
+                "next-dynamic".into(),
+                ResolvedVc::upcast(NextDynamicTransition::new_marker().to_resolved().await?),
+            ),
+            (
+                "next-dynamic-client".into(),
+                ResolvedVc::upcast(NextDynamicTransition::new_marker().to_resolved().await?),
+            ),
+        ]
+        .into_iter()
+        .collect();
+        Ok(ModuleAssetContext::new(
+            TransitionOptions {
+                named_transitions: transitions,
+                ..Default::default()
+            }
+            .cell(),
             self.project().client_compile_time_info(),
             self.client_module_options_context(),
             self.client_resolve_options_context(),
             Vc::cell("app-client".into()),
-        )
+        ))
     }
 
     #[turbo_tasks::function]

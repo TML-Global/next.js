@@ -2,7 +2,11 @@ use anyhow::{bail, Result};
 use turbo_rcstr::RcStr;
 use turbo_tasks::{ResolvedVc, Value, Vc};
 use turbopack::{transition::Transition, ModuleAssetContext};
-use turbopack_core::{context::ProcessResult, reference_type::ReferenceType, source::Source};
+use turbopack_core::{
+    context::{AssetContext, ProcessResult},
+    reference_type::ReferenceType,
+    source::Source,
+};
 use turbopack_ecmascript::chunk::EcmascriptChunkPlaceable;
 
 use super::NextDynamicEntryModule;
@@ -14,14 +18,24 @@ use super::NextDynamicEntryModule;
 /// create the dynamic entry, and the dynamic manifest entry.
 #[turbo_tasks::value]
 pub struct NextDynamicTransition {
-    client_transition: ResolvedVc<Box<dyn Transition>>,
+    client_transition: Option<ResolvedVc<Box<dyn Transition>>>,
 }
 
 #[turbo_tasks::value_impl]
 impl NextDynamicTransition {
     #[turbo_tasks::function]
-    pub fn new(client_transition: ResolvedVc<Box<dyn Transition>>) -> Vc<Self> {
-        NextDynamicTransition { client_transition }.cell()
+    pub fn new_marker() -> Vc<Self> {
+        NextDynamicTransition {
+            client_transition: None,
+        }
+        .cell()
+    }
+    #[turbo_tasks::function]
+    pub fn new_client(client_transition: ResolvedVc<Box<dyn Transition>>) -> Vc<Self> {
+        NextDynamicTransition {
+            client_transition: Some(client_transition),
+        }
+        .cell()
     }
 }
 
@@ -40,22 +54,19 @@ impl Transition for NextDynamicTransition {
         _reference_type: Value<ReferenceType>,
     ) -> Result<Vc<ProcessResult>> {
         let module_asset_context = self.process_context(module_asset_context);
-
-        let this = self.await?;
-
-        Ok(match *this
-            .client_transition
-            .process(
+        let module = match self.await?.client_transition {
+            Some(client_transition) => client_transition.process(
                 source,
                 module_asset_context,
                 Value::new(ReferenceType::Undefined),
-            )
-            .try_into_module()
-            .await?
-        {
+            ),
+            None => module_asset_context.process(source, Value::new(ReferenceType::Undefined)),
+        };
+
+        Ok(match &*module.try_into_module().await? {
             Some(client_module) => {
                 let Some(client_module) =
-                    ResolvedVc::try_sidecast::<Box<dyn EcmascriptChunkPlaceable>>(client_module)
+                    ResolvedVc::try_sidecast::<Box<dyn EcmascriptChunkPlaceable>>(*client_module)
                         .await?
                 else {
                     bail!("not an ecmascript client_module");

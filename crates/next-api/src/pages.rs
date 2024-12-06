@@ -285,14 +285,20 @@ impl PagesProject {
     #[turbo_tasks::function]
     async fn transitions(self: Vc<Self>) -> Result<Vc<TransitionOptions>> {
         Ok(TransitionOptions {
-            named_transitions: [(
-                "next-dynamic".into(),
-                ResolvedVc::upcast(
-                    NextDynamicTransition::new(Vc::upcast(self.client_transition()))
-                        .to_resolved()
-                        .await?,
+            named_transitions: [
+                (
+                    "next-dynamic".into(),
+                    ResolvedVc::upcast(NextDynamicTransition::new_marker().to_resolved().await?),
                 ),
-            )]
+                (
+                    "next-dynamic-client".into(),
+                    ResolvedVc::upcast(
+                        NextDynamicTransition::new_client(Vc::upcast(self.client_transition()))
+                            .to_resolved()
+                            .await?,
+                    ),
+                ),
+            ]
             .into_iter()
             .collect(),
             ..Default::default()

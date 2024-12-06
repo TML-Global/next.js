@@ -47,8 +47,10 @@ pub fn next_dynamic(
         state: match mode {
             NextDynamicMode::Webpack => NextDynamicPatcherState::Webpack,
             NextDynamicMode::Turbopack {
+                dynamic_client_transition_name,
                 dynamic_transition_name,
             } => NextDynamicPatcherState::Turbopack {
+                dynamic_client_transition_name,
                 dynamic_transition_name,
                 imports: vec![],
             },
@@ -75,7 +77,10 @@ pub enum NextDynamicMode {
     /// * during build, each `dynamic()` call will import the module through the given transition,
     ///   which takes care of adding an entry to the manifest and returning an asset that exports
     ///   the entry's key.
-    Turbopack { dynamic_transition_name: String },
+    Turbopack {
+        dynamic_client_transition_name: String,
+        dynamic_transition_name: String,
+    },
 }
 
 #[derive(Debug)]
@@ -99,6 +104,7 @@ enum NextDynamicPatcherState {
     /// the given transition under a particular ident.
     #[allow(unused)]
     Turbopack {
+        dynamic_client_transition_name: String,
         dynamic_transition_name: String,
         imports: Vec<TurbopackImport>,
     },
@@ -441,8 +447,9 @@ fn webpack_options(module_id: Expr) -> Vec<PropOrSpread> {
 impl NextDynamicPatcher {
     fn maybe_add_dynamically_imported_specifier(&mut self, items: &mut Vec<ModuleItem>) {
         let NextDynamicPatcherState::Turbopack {
-            dynamic_transition_name,
+            dynamic_client_transition_name,
             imports,
+            ..
         } = &mut self.state
         else {
             return;
@@ -478,7 +485,7 @@ impl NextDynamicPatcher {
                         // The transition should make sure the imported module ends up in the
                         // dynamic manifest.
                         with: Some(with_transition_chunking_type(
-                            dynamic_transition_name,
+                            dynamic_client_transition_name,
                             "none",
                         )),
                         phase: Default::default(),
