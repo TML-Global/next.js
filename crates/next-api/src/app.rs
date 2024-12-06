@@ -945,11 +945,8 @@ impl AppEndpoint {
                 }
                 let client_shared_availability_info = client_shared_chunk_group.availability_info;
 
-                let reduced_graphs = get_reduced_graphs_for_endpoint(
-                    this.app_project.project(),
-                    *rsc_entry,
-                    Vc::upcast(this.app_project.client_module_context()),
-                );
+                let reduced_graphs =
+                    get_reduced_graphs_for_endpoint(this.app_project.project(), *rsc_entry);
                 let next_dynamic_imports = reduced_graphs
                     .get_next_dynamic_imports_for_endpoint(*rsc_entry)
                     .await?;
@@ -1109,11 +1106,8 @@ impl AppEndpoint {
             };
 
         let server_action_manifest_loader = if process_client_components {
-            let reduced_graphs = get_reduced_graphs_for_endpoint(
-                this.app_project.project(),
-                *rsc_entry,
-                Vc::upcast(this.app_project.client_module_context()),
-            );
+            let reduced_graphs =
+                get_reduced_graphs_for_endpoint(this.app_project.project(), *rsc_entry);
             let actions = reduced_graphs.get_server_actions_for_endpoint(
                 *rsc_entry,
                 match runtime {

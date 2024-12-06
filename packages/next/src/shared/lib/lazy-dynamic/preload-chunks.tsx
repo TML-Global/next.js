@@ -26,6 +26,7 @@ export function PreloadChunks({
   // and find the corresponding CSS files to preload
   if (workStore.reactLoadableManifest && moduleIds) {
     const manifest = workStore.reactLoadableManifest
+    console.log(moduleIds, manifest)
     for (const key of moduleIds) {
       if (!manifest[key]) continue
       const chunks = manifest[key].files

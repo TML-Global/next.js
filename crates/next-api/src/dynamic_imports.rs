@@ -1,7 +1,6 @@
-use std::collections::HashMap;
-
-use anyhow::{bail, Result};
+use anyhow::Result;
 use futures::Future;
+use next_core::next_dynamic::NextDynamicEntryModule;
 use swc_core::ecma::{
     ast::{CallExpr, Callee, Expr, Ident, Lit},
     visit::{Visit, VisitWith},
@@ -10,8 +9,8 @@ use turbo_rcstr::RcStr;
 use turbo_tasks::{FxIndexMap, ResolvedVc, TryFlatJoinIterExt, Value, Vc};
 use turbopack_core::{
     chunk::{
-        availability_info::AvailabilityInfo, ChunkableModule, ChunkingContext, ChunkingContextExt,
-        EvaluatableAsset,
+        availability_info::AvailabilityInfo, ChunkItemExt, ChunkableModule, ChunkingContext,
+        ChunkingContextExt, EvaluatableAsset, ModuleId,
     },
     context::AssetContext,
     module::Module,
@@ -24,45 +23,42 @@ use turbopack_ecmascript::{parse::ParseResult, resolve::esm_resolve, EcmascriptP
 use crate::module_graph::SingleModuleGraph;
 
 async fn collect_chunk_group_inner<F, Fu>(
-    dynamic_import_entries: &FxIndexMap<ResolvedVc<Box<dyn Module>>, DynamicImportedModules>,
+    chunking_context: Vc<Box<dyn ChunkingContext>>,
+    dynamic_import_entries: &FxIndexMap<
+        ResolvedVc<Box<dyn Module>>,
+        ResolvedVc<NextDynamicEntryModule>,
+    >,
     mut build_chunk: F,
 ) -> Result<Vc<DynamicImportedChunks>>
 where
     F: FnMut(Vc<Box<dyn ChunkableModule>>) -> Fu,
     Fu: Future<Output = Result<Vc<OutputAssets>>> + Send,
 {
-    let mut chunks_hash: HashMap<RcStr, ResolvedVc<OutputAssets>> = HashMap::new();
     let mut dynamic_import_chunks = FxIndexMap::default();
 
     // Iterate over the collected import mappings, and create a chunk for each
     // dynamic import.
-    for (origin_module, dynamic_imports) in dynamic_import_entries {
-        for (imported_raw_str, imported_module) in dynamic_imports {
-            let chunk = if let Some(chunk) = chunks_hash.get(imported_raw_str) {
-                *chunk
-            } else {
-                let Some(module) =
-                    ResolvedVc::try_sidecast::<Box<dyn ChunkableModule>>(*imported_module).await?
-                else {
-                    bail!("module must be evaluatable");
-                };
 
-                // [Note]: this seems to create duplicated chunks for the same module to the original import() call
-                // and the explicit chunk we ask in here. So there'll be at least 2
-                // chunks for the same module, relying on
-                // naive hash to have additional
-                // chunks in case if there are same modules being imported in different
-                // origins.
-                let chunk_group = build_chunk(*module).await?.to_resolved().await?;
-                chunks_hash.insert(imported_raw_str.clone(), chunk_group);
-                chunk_group
-            };
+    // TODO
+    // ast-grep-ignore: to-resolved-in-loop
+    for (_, imported_module) in dynamic_import_entries {
+        let module = ResolvedVc::upcast::<Box<dyn ChunkableModule>>(*imported_module);
 
-            dynamic_import_chunks
-                .entry(*origin_module)
-                .or_insert_with(Vec::new)
-                .push((imported_raw_str.clone(), chunk));
-        }
+        // [Note]: this seems to create duplicated chunks for the same module to the original import() call
+        // and the explicit chunk we ask in here. So there'll be at least 2
+        // chunks for the same module, relying on
+        // naive hash to have additional
+        // chunks in case if there are same modules being imported in different
+        // origins.
+        let chunk_group = build_chunk(*module).await?.to_resolved().await?;
+
+        let module_id = imported_module
+            .as_chunk_item(Vc::upcast(chunking_context))
+            .id()
+            .to_resolved()
+            .await?;
+
+        dynamic_import_chunks.insert(*imported_module, (module_id, chunk_group));
     }
 
     Ok(Vc::cell(dynamic_import_chunks))
@@ -70,30 +66,44 @@ where
 
 pub(crate) async fn collect_chunk_group(
     chunking_context: Vc<Box<dyn ChunkingContext>>,
-    dynamic_import_entries: &FxIndexMap<ResolvedVc<Box<dyn Module>>, DynamicImportedModules>,
+    dynamic_import_entries: &FxIndexMap<
+        ResolvedVc<Box<dyn Module>>,
+        ResolvedVc<NextDynamicEntryModule>,
+    >,
     availability_info: Value<AvailabilityInfo>,
 ) -> Result<Vc<DynamicImportedChunks>> {
-    collect_chunk_group_inner(dynamic_import_entries, |module| async move {
-        Ok(chunking_context.chunk_group_assets(module, availability_info))
-    })
+    collect_chunk_group_inner(
+        chunking_context,
+        dynamic_import_entries,
+        |module| async move { Ok(chunking_context.chunk_group_assets(module, availability_info)) },
+    )
     .await
 }
 
 pub(crate) async fn collect_evaluated_chunk_group(
     chunking_context: Vc<Box<dyn ChunkingContext>>,
-    dynamic_import_entries: &FxIndexMap<ResolvedVc<Box<dyn Module>>, DynamicImportedModules>,
+    dynamic_import_entries: &FxIndexMap<
+        ResolvedVc<Box<dyn Module>>,
+        ResolvedVc<NextDynamicEntryModule>,
+    >,
 ) -> Result<Vc<DynamicImportedChunks>> {
-    collect_chunk_group_inner(dynamic_import_entries, |module| async move {
-        if let Some(module) = Vc::try_resolve_downcast::<Box<dyn EvaluatableAsset>>(module).await? {
-            Ok(chunking_context.evaluated_chunk_group_assets(
-                module.ident(),
-                Vc::cell(vec![ResolvedVc::upcast(module.to_resolved().await?)]),
-                Value::new(AvailabilityInfo::Root),
-            ))
-        } else {
-            Ok(chunking_context.chunk_group_assets(module, Value::new(AvailabilityInfo::Root)))
-        }
-    })
+    collect_chunk_group_inner(
+        chunking_context,
+        dynamic_import_entries,
+        |module| async move {
+            if let Some(module) =
+                Vc::try_resolve_downcast::<Box<dyn EvaluatableAsset>>(module).await?
+            {
+                Ok(chunking_context.evaluated_chunk_group_assets(
+                    module.ident(),
+                    Vc::cell(vec![ResolvedVc::upcast(module.to_resolved().await?)]),
+                    Value::new(AvailabilityInfo::Root),
+                ))
+            } else {
+                Ok(chunking_context.chunk_group_assets(module, Value::new(AvailabilityInfo::Root)))
+            }
+        },
+    )
     .await
 }
 
@@ -266,7 +276,10 @@ pub struct OptionDynamicImportsMap(Option<ResolvedVc<DynamicImportsMap>>);
 
 #[turbo_tasks::value(transparent)]
 pub struct DynamicImportedChunks(
-    pub FxIndexMap<ResolvedVc<Box<dyn Module>>, DynamicImportedOutputAssets>,
+    pub  FxIndexMap<
+        ResolvedVc<NextDynamicEntryModule>,
+        (ResolvedVc<ModuleId>, ResolvedVc<OutputAssets>),
+    >,
 );
 
 /// "app/client.js [app-ssr] (ecmascript)" ->
@@ -274,35 +287,27 @@ pub struct DynamicImportedChunks(
 #[turbo_tasks::value(transparent)]
 pub struct DynamicImports(pub FxIndexMap<ResolvedVc<Box<dyn Module>>, DynamicImportedModules>);
 
+#[turbo_tasks::value(transparent)]
+pub struct DynamicImportEntries(
+    pub FxIndexMap<ResolvedVc<Box<dyn Module>>, ResolvedVc<NextDynamicEntryModule>>,
+);
+
 #[turbo_tasks::function]
-pub async fn map_next_dynamic(
-    graph: Vc<SingleModuleGraph>,
-    client_asset_context: Vc<Box<dyn AssetContext>>,
-) -> Result<Vc<DynamicImports>> {
-    let data = graph
+pub async fn map_next_dynamic(graph: Vc<SingleModuleGraph>) -> Result<Vc<DynamicImportEntries>> {
+    let actions = graph
         .await?
         .enumerate_nodes()
-        .map(|(_, node)| {
-            async move {
-                // TODO: compare module contexts instead?
-                let is_browser = node
-                    .layer
-                    .as_ref()
-                    .is_some_and(|layer| &**layer == "app-client" || &**layer == "client");
-                if !is_browser {
-                    // Only collect in RSC and SSR
-                    if let Some(v) =
-                        &*build_dynamic_imports_map_for_module(client_asset_context, *node.module)
-                            .await?
-                    {
-                        return Ok(Some(v.await?.clone_value()));
-                    }
-                }
+        .map(|(_, node)| async move {
+            let module = node.module;
+            if let Some(dynamic_entry_module) =
+                ResolvedVc::try_downcast_type::<NextDynamicEntryModule>(module).await?
+            {
+                Ok(Some((module, dynamic_entry_module)))
+            } else {
                 Ok(None)
             }
         })
         .try_flat_join()
         .await?;
-
-    Ok(Vc::cell(data.into_iter().collect()))
+    Ok(Vc::cell(actions.into_iter().collect()))
 }

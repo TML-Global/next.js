@@ -39,7 +39,7 @@ use turbopack_core::{
 
 use crate::{
     client_references::{map_client_references, ClientReferenceMapType, ClientReferencesSet},
-    dynamic_imports::{map_next_dynamic, DynamicImports},
+    dynamic_imports::{map_next_dynamic, DynamicImportEntries, DynamicImports},
     project::Project,
     server_actions::{map_server_actions, to_rsc_context, AllActions, AllModuleActions},
 };
@@ -548,8 +548,8 @@ async fn get_module_graph_for_endpoint(
 pub struct NextDynamicGraph {
     is_single_page: bool,
     graph: ResolvedVc<SingleModuleGraph>,
-    /// RSC/SSR importer -> dynamic imports (specifier and client module)
-    data: ResolvedVc<DynamicImports>,
+    /// list of NextDynamicEntryModules
+    data: ResolvedVc<DynamicImportEntries>,
 }
 
 #[turbo_tasks::value_impl]
@@ -558,13 +558,8 @@ impl NextDynamicGraph {
     pub async fn new_with_entries(
         graph: ResolvedVc<SingleModuleGraph>,
         is_single_page: bool,
-        client_asset_context: Vc<Box<dyn AssetContext>>,
     ) -> Result<Vc<Self>> {
-        let mapped = map_next_dynamic(*graph, client_asset_context);
-        mapped.strongly_consistent().await?;
-        // TODO this can be removed once next/dynamic collection is moved to the transition instead
-        // of AST traversal
-        let _ = mapped.take_collectibles::<Box<dyn Issue>>();
+        let mapped = map_next_dynamic(*graph);
 
         // TODO shrink graph here, using the information from
         //  - `mapped` (which lists the relevant nodes)
@@ -602,7 +597,7 @@ impl NextDynamicGraph {
     pub async fn get_next_dynamic_imports_for_endpoint(
         &self,
         entry: ResolvedVc<Box<dyn Module>>,
-    ) -> Result<Vc<DynamicImports>> {
+    ) -> Result<Vc<DynamicImportEntries>> {
         let span = tracing::info_span!("collect next/dynamic imports for endpoint");
         async move {
             if self.is_single_page {
@@ -616,7 +611,7 @@ impl NextDynamicGraph {
                 let mut result = FxIndexMap::default();
                 graph.traverse_from_entry(entry, |node| {
                     if let Some(node_data) = data.get(&node.module) {
-                        result.insert(node.module, node_data.clone());
+                        result.insert(node.module, *node_data);
                     }
                 })?;
                 Ok(Vc::cell(result))
@@ -862,7 +857,7 @@ impl ReducedGraphs {
     pub async fn get_next_dynamic_imports_for_endpoint(
         &self,
         entry: Vc<Box<dyn Module>>,
-    ) -> Result<Vc<DynamicImports>> {
+    ) -> Result<Vc<DynamicImportEntries>> {
         let span = tracing::info_span!("collect all next/dynamic imports for endpoint");
         async move {
             if let [graph] = &self.next_dynamic[..] {
@@ -877,7 +872,7 @@ impl ReducedGraphs {
                             .get_next_dynamic_imports_for_endpoint(entry)
                             .await?
                             .iter()
-                            .map(|(k, v)| (*k, v.clone()))
+                            .map(|(k, v)| (*k, *v))
                             // TODO remove this collect and return an iterator instead
                             .collect::<Vec<_>>())
                     })
@@ -976,8 +971,6 @@ impl ReducedGraphs {
 async fn get_reduced_graphs_for_endpoint_inner(
     project: Vc<Project>,
     entry: ResolvedVc<Box<dyn Module>>,
-    // TODO should this happen globally or per endpoint? Do they all have the same context?
-    client_asset_context: Vc<Box<dyn AssetContext>>,
 ) -> Result<Vc<ReducedGraphs>> {
     let (is_single_page, graphs) = match &*project.next_mode().await? {
         NextMode::Development => (
@@ -1004,10 +997,7 @@ async fn get_reduced_graphs_for_endpoint_inner(
     let next_dynamic = async {
         graphs
             .iter()
-            .map(|graph| {
-                NextDynamicGraph::new_with_entries(**graph, is_single_page, client_asset_context)
-                    .to_resolved()
-            })
+            .map(|graph| NextDynamicGraph::new_with_entries(**graph, is_single_page).to_resolved())
             .try_join()
             .await
     }
@@ -1053,12 +1043,10 @@ async fn get_reduced_graphs_for_endpoint_inner(
 pub async fn get_reduced_graphs_for_endpoint(
     project: Vc<Project>,
     entry: Vc<Box<dyn Module>>,
-    // TODO should this happen globally or per endpoint? Do they all have the same context?
-    client_asset_context: Vc<Box<dyn AssetContext>>,
 ) -> Result<Vc<ReducedGraphs>> {
     // TODO get rid of this function once everything inside of
     // `get_reduced_graphs_for_endpoint_inner` calls `take_collectibles()` when needed
-    let result = get_reduced_graphs_for_endpoint_inner(project, entry, client_asset_context);
+    let result = get_reduced_graphs_for_endpoint_inner(project, entry);
     if project.next_mode().await?.is_production() {
         result.strongly_consistent().await?;
         let _issues = result.take_collectibles::<Box<dyn Issue>>();

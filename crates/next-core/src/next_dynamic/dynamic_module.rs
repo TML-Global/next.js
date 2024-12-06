@@ -92,7 +92,7 @@ impl ChunkableModule for NextDynamicEntryModule {
         chunking_context: ResolvedVc<Box<dyn ChunkingContext>>,
     ) -> Vc<Box<dyn turbopack_core::chunk::ChunkItem>> {
         Vc::upcast(
-            NextServerComponentChunkItem {
+            NextDynamicEntryChunkItem {
                 chunking_context,
                 inner: self,
             }
@@ -128,13 +128,13 @@ impl EcmascriptChunkPlaceable for NextDynamicEntryModule {
 }
 
 #[turbo_tasks::value]
-struct NextServerComponentChunkItem {
+struct NextDynamicEntryChunkItem {
     chunking_context: ResolvedVc<Box<dyn ChunkingContext>>,
     inner: ResolvedVc<NextDynamicEntryModule>,
 }
 
 #[turbo_tasks::value_impl]
-impl EcmascriptChunkItem for NextServerComponentChunkItem {
+impl EcmascriptChunkItem for NextDynamicEntryChunkItem {
     #[turbo_tasks::function]
     fn chunking_context(&self) -> Vc<Box<dyn ChunkingContext>> {
         *self.chunking_context
@@ -164,7 +164,7 @@ impl EcmascriptChunkItem for NextServerComponentChunkItem {
 }
 
 #[turbo_tasks::value_impl]
-impl ChunkItem for NextServerComponentChunkItem {
+impl ChunkItem for NextDynamicEntryChunkItem {
     #[turbo_tasks::function]
     fn asset_ident(&self) -> Vc<AssetIdent> {
         self.inner.ident()

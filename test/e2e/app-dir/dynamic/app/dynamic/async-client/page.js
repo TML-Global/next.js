@@ -2,6 +2,7 @@
 
 import dynamic from 'next/dynamic'
 
+console.log('HELLO WORLD')
 const Client1 = dynamic(() => import('./client'))
 const Client2 = dynamic(() => import('./client-no-ssr'), { ssr: false })
 

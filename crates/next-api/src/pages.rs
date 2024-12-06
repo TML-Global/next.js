@@ -844,11 +844,8 @@ impl PageEndpoint {
                 runtime,
             } = *self.internal_ssr_chunk_module().await?;
 
-            let reduced_graphs = get_reduced_graphs_for_endpoint(
-                this.pages_project.project(),
-                *ssr_module,
-                Vc::upcast(this.pages_project.client_module_context()),
-            );
+            let reduced_graphs =
+                get_reduced_graphs_for_endpoint(this.pages_project.project(), *ssr_module);
             let next_dynamic_imports = reduced_graphs
                 .get_next_dynamic_imports_for_endpoint(*ssr_module)
                 .await?;

@@ -5,13 +5,14 @@ use std::{
 
 use pathdiff::diff_paths;
 use swc_core::{
+    atoms::Atom,
     common::{errors::HANDLER, FileName, Span, DUMMY_SP},
     ecma::{
         ast::{
             op, ArrayLit, ArrowExpr, BinExpr, BlockStmt, BlockStmtOrExpr, Bool, CallExpr, Callee,
-            Expr, ExprOrSpread, ExprStmt, Id, Ident, IdentName, ImportDecl, ImportDefaultSpecifier,
-            ImportNamedSpecifier, ImportSpecifier, KeyValueProp, Lit, ModuleDecl, ModuleItem,
-            ObjectLit, Pass, Prop, PropName, PropOrSpread, Stmt, Str, Tpl, UnaryExpr, UnaryOp,
+            Expr, ExprOrSpread, ExprStmt, Id, Ident, IdentName, ImportDecl, ImportNamedSpecifier,
+            ImportSpecifier, KeyValueProp, Lit, ModuleDecl, ModuleItem, ObjectLit, Pass, Prop,
+            PropName, PropOrSpread, Stmt, Str, Tpl, UnaryExpr, UnaryOp,
         },
         utils::{private_ident, quote_ident, ExprFactory},
         visit::{fold_pass, Fold, FoldWith},
@@ -87,7 +88,7 @@ struct NextDynamicPatcher {
     filename: Arc<FileName>,
     dynamic_bindings: Vec<Id>,
     is_next_dynamic_first_arg: bool,
-    dynamically_imported_specifier: Option<(String, Span)>,
+    dynamically_imported_specifier: Option<(Atom, Span)>,
     state: NextDynamicPatcherState,
 }
 
@@ -105,23 +106,8 @@ enum NextDynamicPatcherState {
 
 #[derive(Debug, Clone, Eq, PartialEq)]
 enum TurbopackImport {
-    DevelopmentTransition {
-        id_ident: Ident,
-        chunks_ident: Ident,
-        specifier: String,
-    },
-    DevelopmentId {
-        id_ident: Ident,
-        specifier: String,
-    },
-    BuildTransition {
-        id_ident: Ident,
-        specifier: String,
-    },
-    BuildId {
-        id_ident: Ident,
-        specifier: String,
-    },
+    // TODO do we need more variants? server vs client vs dev vs prod?
+    Import { id_ident: Ident, specifier: Atom },
 }
 
 impl Fold for NextDynamicPatcher {
@@ -155,11 +141,11 @@ impl Fold for NextDynamicPatcher {
             if let Callee::Import(..) = &expr.callee {
                 match &*expr.args[0].expr {
                     Expr::Lit(Lit::Str(Str { value, span, .. })) => {
-                        self.dynamically_imported_specifier = Some((value.to_string(), *span));
+                        self.dynamically_imported_specifier = Some((value.clone(), *span));
                     }
                     Expr::Tpl(Tpl { exprs, quasis, .. }) if exprs.is_empty() => {
                         self.dynamically_imported_specifier =
-                            Some((quasis[0].raw.to_string(), quasis[0].span));
+                            Some((quasis[0].raw.clone(), quasis[0].span));
                     }
                     _ => {}
                 }
@@ -223,18 +209,19 @@ impl Fold for NextDynamicPatcher {
                         _ => None,
                     };
 
-                    // dev client or server:
-                    // loadableGenerated: {
-                    //   modules:
-                    // ["/project/src/file-being-transformed.js -> " + '../components/hello'] }
-
-                    // prod client
-                    // loadableGenerated: {
-                    //   webpack: () => [require.resolveWeak('../components/hello')],
                     let generated = Box::new(Expr::Object(ObjectLit {
                         span: DUMMY_SP,
                         props: match &mut self.state {
                             NextDynamicPatcherState::Webpack => {
+                                // dev client or server:
+                                // loadableGenerated: {
+                                //   modules:
+                                // ["/project/src/file-being-transformed.js -> " +
+                                // '../components/hello'] }
+                                //
+                                // prod client
+                                // loadableGenerated: {
+                                //   webpack: () => [require.resolveWeak('../components/hello')],
                                 if self.is_development || self.is_server_compiler {
                                     module_id_options(quote!(
                                         "$left + $right" as Expr,
@@ -252,76 +239,23 @@ impl Fold for NextDynamicPatcher {
                                     ))
                                 }
                             }
+
                             NextDynamicPatcherState::Turbopack { imports, .. } => {
+                                //     loadableGenerated: {
+                                //     modules: [
+                                //         "[project]/test/e2e/app-dir/dynamic/app/dynamic/
+                                // async-client/client.js [app-client] (ecmascript, next/dynamic
+                                // entry)"     ]
+                                // }
                                 let id_ident =
                                     private_ident!(dynamically_imported_specifier_span, "id");
 
-                                match (self.is_development, self.is_server_compiler) {
-                                    (true, true) => {
-                                        let chunks_ident = private_ident!(
-                                            dynamically_imported_specifier_span,
-                                            "chunks"
-                                        );
+                                imports.push(TurbopackImport::Import {
+                                    id_ident: id_ident.clone(),
+                                    specifier: dynamically_imported_specifier.clone(),
+                                });
 
-                                        imports.push(TurbopackImport::DevelopmentTransition {
-                                            id_ident: id_ident.clone(),
-                                            chunks_ident: chunks_ident.clone(),
-                                            specifier: dynamically_imported_specifier.clone(),
-                                        });
-
-                                        // On the server, the key needs to be serialized because it
-                                        // will be used to index the React Loadable Manifest, which
-                                        // is a normal JS object. In Turbo mode, this is a proxy,
-                                        // but the key will still be coerced to a string.
-                                        module_id_options(quote!(
-                                            r#"
-                                            JSON.stringify({
-                                                id: $id,
-                                                chunks: $chunks
-                                            })
-                                            "# as Expr,
-                                            id = id_ident,
-                                            chunks = chunks_ident,
-                                        ))
-                                    }
-                                    (true, false) => {
-                                        imports.push(TurbopackImport::DevelopmentId {
-                                            id_ident: id_ident.clone(),
-                                            specifier: dynamically_imported_specifier.clone(),
-                                        });
-
-                                        // On the client, we only need the target module ID, which
-                                        // will be reported under the `dynamicIds` property of Next
-                                        // data.
-                                        module_id_options(Expr::Ident(id_ident))
-                                    }
-                                    (false, true) => {
-                                        let id_ident = private_ident!(
-                                            dynamically_imported_specifier_span,
-                                            "id"
-                                        );
-
-                                        imports.push(TurbopackImport::BuildTransition {
-                                            id_ident: id_ident.clone(),
-                                            specifier: dynamically_imported_specifier.clone(),
-                                        });
-
-                                        module_id_options(Expr::Ident(id_ident))
-                                    }
-                                    (false, false) => {
-                                        let id_ident = private_ident!(
-                                            dynamically_imported_specifier_span,
-                                            "id"
-                                        );
-
-                                        imports.push(TurbopackImport::BuildId {
-                                            id_ident: id_ident.clone(),
-                                            specifier: dynamically_imported_specifier.clone(),
-                                        });
-
-                                        module_id_options(Expr::Ident(id_ident))
-                                    }
-                                }
+                                module_id_options(Expr::Ident(id_ident))
                             }
                         },
                     }));
@@ -371,58 +305,84 @@ impl Fold for NextDynamicPatcher {
                         }
                     }
 
-                    if has_ssr_false
-                        && self.is_server_compiler
-                        && !self.is_react_server_layer
-                        // When it's not prefer to picking up ESM, as it's in the pages router, we don't need to do it as it doesn't need to enter the non-ssr module.
-                        // Also transforming it to `require.resolveWeak` and with ESM import, like require.resolveWeak(esm asset) is not available as it's commonjs importing ESM.
-                        && self.prefer_esm
+                    match &self.state {
+                        NextDynamicPatcherState::Webpack => {
+                            // Only use `require.resolveWebpack` to decouple modules for webpack,
+                            // turbopack doesn't need this
 
-                        // Only use `require.resolveWebpack` to decouple modules for webpack,
-                        // turbopack doesn't need this
-                        && self.state == NextDynamicPatcherState::Webpack
-                    {
-                        // if it's server components SSR layer
-                        // Transform 1st argument `expr.args[0]` aka the module loader from:
-                        // dynamic(() => import('./client-mod'), { ssr: false }))`
-                        // into:
-                        // dynamic(async () => {
-                        //   require.resolveWeak('./client-mod')
-                        // }, { ssr: false }))`
+                            // When it's not prefering to picking up ESM (in the pages router), we
+                            // don't need to do it as it doesn't need to enter the non-ssr module.
+                            //
+                            // Also transforming it to `require.resolveWeak` doesn't work with ESM
+                            // imports ( i.e. require.resolveWeak(esm asset)).
+                            if has_ssr_false
+                                && self.is_server_compiler
+                                && !self.is_react_server_layer
+                                && self.prefer_esm
+                            {
+                                // if it's server components SSR layer
+                                // Transform 1st argument `expr.args[0]` aka the module loader from:
+                                // dynamic(() => import('./client-mod'), { ssr: false }))`
+                                // into:
+                                // dynamic(async () => {
+                                //   require.resolveWeak('./client-mod')
+                                // }, { ssr: false }))`
 
-                        let require_resolve_weak_expr = Expr::Call(CallExpr {
-                            span: DUMMY_SP,
-                            callee: quote_ident!("require.resolveWeak").as_callee(),
-                            args: vec![ExprOrSpread {
-                                spread: None,
-                                expr: Box::new(Expr::Lit(Lit::Str(Str {
+                                let require_resolve_weak_expr = Expr::Call(CallExpr {
                                     span: DUMMY_SP,
-                                    value: dynamically_imported_specifier.clone().into(),
-                                    raw: None,
-                                }))),
-                            }],
-                            ..Default::default()
-                        });
+                                    callee: quote_ident!("require.resolveWeak").as_callee(),
+                                    args: vec![ExprOrSpread {
+                                        spread: None,
+                                        expr: Box::new(Expr::Lit(Lit::Str(Str {
+                                            span: DUMMY_SP,
+                                            value: dynamically_imported_specifier.clone(),
+                                            raw: None,
+                                        }))),
+                                    }],
+                                    ..Default::default()
+                                });
 
-                        let side_effect_free_loader_arg = Expr::Arrow(ArrowExpr {
-                            span: DUMMY_SP,
-                            params: vec![],
-                            body: Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
-                                span: DUMMY_SP,
-                                stmts: vec![Stmt::Expr(ExprStmt {
+                                let side_effect_free_loader_arg = Expr::Arrow(ArrowExpr {
                                     span: DUMMY_SP,
-                                    expr: Box::new(exec_expr_when_resolve_weak_available(
-                                        &require_resolve_weak_expr,
-                                    )),
-                                })],
+                                    params: vec![],
+                                    body: Box::new(BlockStmtOrExpr::BlockStmt(BlockStmt {
+                                        span: DUMMY_SP,
+                                        stmts: vec![Stmt::Expr(ExprStmt {
+                                            span: DUMMY_SP,
+                                            expr: Box::new(exec_expr_when_resolve_weak_available(
+                                                &require_resolve_weak_expr,
+                                            )),
+                                        })],
+                                        ..Default::default()
+                                    })),
+                                    is_async: true,
+                                    is_generator: false,
+                                    ..Default::default()
+                                });
+
+                                expr.args[0] = side_effect_free_loader_arg.as_arg();
+                            }
+                        }
+                        NextDynamicPatcherState::Turbopack {
+                            dynamic_transition_name,
+                            ..
+                        } => {
+                            let specifier =
+                                Expr::Lit(Lit::Str(dynamically_imported_specifier.clone().into()));
+                            let import_call = quote!(
+                                "import($specifier, {with: $with})" as Box<Expr>,
+                                specifier: Expr = specifier,
+                                with: Expr = with_transition(dynamic_transition_name).into(),
+                            );
+
+                            let import_callback = Expr::Arrow(ArrowExpr {
+                                params: vec![],
+                                body: Box::new(BlockStmtOrExpr::Expr(import_call)),
                                 ..Default::default()
-                            })),
-                            is_async: true,
-                            is_generator: false,
-                            ..Default::default()
-                        });
+                            });
 
-                        expr.args[0] = side_effect_free_loader_arg.as_arg();
+                            expr.args[0] = import_callback.as_arg();
+                        }
                     }
 
                     let second_arg = ExprOrSpread {
@@ -492,67 +452,7 @@ impl NextDynamicPatcher {
 
         for import in std::mem::take(imports) {
             match import {
-                TurbopackImport::DevelopmentTransition {
-                    id_ident,
-                    chunks_ident,
-                    specifier,
-                } => {
-                    new_items.push(ModuleItem::ModuleDecl(ModuleDecl::Import(ImportDecl {
-                        span: DUMMY_SP,
-                        specifiers: vec![
-                            ImportSpecifier::Default(ImportDefaultSpecifier {
-                                span: DUMMY_SP,
-                                local: id_ident,
-                            }),
-                            ImportSpecifier::Named(ImportNamedSpecifier {
-                                span: DUMMY_SP,
-                                local: chunks_ident,
-                                imported: Some(
-                                    Ident::new("chunks".into(), DUMMY_SP, Default::default())
-                                        .into(),
-                                ),
-                                is_type_only: false,
-                            }),
-                        ],
-                        src: Box::new(specifier.into()),
-                        type_only: false,
-                        // The transition should return both the target module's id
-                        // and the chunks it needs to run.
-                        with: Some(with_transition(dynamic_transition_name)),
-                        phase: Default::default(),
-                    })));
-                }
-                TurbopackImport::DevelopmentId {
-                    id_ident,
-                    specifier,
-                } => {
-                    // Turbopack will automatically transform the imported `__turbopack_module_id__`
-                    // identifier into the imported module's id.
-                    new_items.push(ModuleItem::ModuleDecl(ModuleDecl::Import(ImportDecl {
-                        span: DUMMY_SP,
-                        specifiers: vec![ImportSpecifier::Named(ImportNamedSpecifier {
-                            span: DUMMY_SP,
-                            local: id_ident,
-                            imported: Some(
-                                Ident::new(
-                                    "__turbopack_module_id__".into(),
-                                    DUMMY_SP,
-                                    Default::default(),
-                                )
-                                .into(),
-                            ),
-                            is_type_only: false,
-                        })],
-                        src: Box::new(specifier.into()),
-                        type_only: false,
-                        // We don't want this import to cause the imported module to be considered
-                        // for chunking through this import; we only need
-                        // the module id.
-                        with: Some(with_chunking_type("none")),
-                        phase: Default::default(),
-                    })));
-                }
-                TurbopackImport::BuildTransition {
+                TurbopackImport::Import {
                     id_ident,
                     specifier,
                 } => {
@@ -577,41 +477,45 @@ impl NextDynamicPatcher {
                         type_only: false,
                         // The transition should make sure the imported module ends up in the
                         // dynamic manifest.
-                        with: Some(with_transition(dynamic_transition_name)),
-                        phase: Default::default(),
-                    })));
-                }
-                TurbopackImport::BuildId {
-                    id_ident,
-                    specifier,
-                } => {
-                    // Turbopack will automatically transform the imported `__turbopack_module_id__`
-                    // identifier into the imported module's id.
-                    new_items.push(ModuleItem::ModuleDecl(ModuleDecl::Import(ImportDecl {
-                        span: DUMMY_SP,
-                        specifiers: vec![ImportSpecifier::Named(ImportNamedSpecifier {
-                            span: DUMMY_SP,
-                            local: id_ident,
-                            imported: Some(
-                                Ident::new(
-                                    "__turbopack_module_id__".into(),
-                                    DUMMY_SP,
-                                    Default::default(),
-                                )
-                                .into(),
-                            ),
-                            is_type_only: false,
-                        })],
-                        src: Box::new(specifier.into()),
-                        type_only: false,
-                        // We don't want this import to cause the imported module to be considered
-                        // for chunking through this import; we only need
-                        // the module id.
-                        with: Some(with_chunking_type("none")),
+                        with: Some(with_transition_chunking_type(
+                            dynamic_transition_name,
+                            "none",
+                        )),
                         phase: Default::default(),
                     })));
                 }
             }
+            // TurbopackImport::BuildId {
+            //     id_ident,
+            //     specifier,
+            // } => {
+            //     // Turbopack will automatically transform the imported `__turbopack_module_id__`
+            //     // identifier into the imported module's id.
+            //     new_items.push(ModuleItem::ModuleDecl(ModuleDecl::Import(ImportDecl {
+            //         span: DUMMY_SP,
+            //         specifiers: vec![ImportSpecifier::Named(ImportNamedSpecifier {
+            //             span: DUMMY_SP,
+            //             local: id_ident,
+            //             imported: Some(
+            //                 Ident::new(
+            //                     "__turbopack_module_id__".into(),
+            //                     DUMMY_SP,
+            //                     Default::default(),
+            //                 )
+            //                 .into(),
+            //             ),
+            //             is_type_only: false,
+            //         })],
+            //         src: Box::new(specifier.into()),
+            //         type_only: false,
+            //         // We don't want this import to cause the imported module to be considered
+
+            //         // for chunking through this import; we only need
+            //         // the module id.
+            //         with: Some(with_chunking_type("none")),
+            //         phase: Default::default(),
+            //     })));
+            // }
         }
 
         new_items.append(items);
@@ -673,19 +577,26 @@ fn rel_filename(base: Option<&Path>, file: &FileName) -> String {
     rel_path.display().to_string()
 }
 
-fn with_chunking_type(chunking_type: &str) -> Box<ObjectLit> {
-    with_clause(&[("turbopack-chunking-type", chunking_type)])
-}
+// fn with_chunking_type(chunking_type: &str) -> Box<ObjectLit> {
+//     with_clause(&[("turbopack-chunking-type", chunking_type)])
+// }
 
-fn with_transition(transition_name: &str) -> Box<ObjectLit> {
+fn with_transition(transition_name: &str) -> ObjectLit {
     with_clause(&[("turbopack-transition", transition_name)])
 }
 
-fn with_clause<'a>(entries: impl IntoIterator<Item = &'a (&'a str, &'a str)>) -> Box<ObjectLit> {
-    Box::new(ObjectLit {
+fn with_transition_chunking_type(transition_name: &str, chunking_type: &str) -> Box<ObjectLit> {
+    Box::new(with_clause(&[
+        ("turbopack-transition", transition_name),
+        ("turbopack-chunking-type", chunking_type),
+    ]))
+}
+
+fn with_clause<'a>(entries: impl IntoIterator<Item = &'a (&'a str, &'a str)>) -> ObjectLit {
+    ObjectLit {
         span: DUMMY_SP,
         props: entries.into_iter().map(|(k, v)| with_prop(k, v)).collect(),
-    })
+    }
 }
 
 fn with_prop(key: &str, value: &str) -> PropOrSpread {
