@@ -33,6 +33,11 @@ export class ExternalObject<T> {
     [K: symbol]: T
   }
 }
+export interface TransformOutput {
+  code: string
+  map?: string
+  output?: string
+}
 export function mdxCompile(
   value: string,
   option: Buffer,
