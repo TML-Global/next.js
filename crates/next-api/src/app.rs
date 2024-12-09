@@ -38,8 +38,8 @@ use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use turbo_rcstr::RcStr;
 use turbo_tasks::{
-    debug::ValueDebug, fxindexmap, fxindexset, trace::TraceRawVcs, Completion, FxIndexSet,
-    ResolvedVc, TryJoinIterExt, Value, ValueToString, Vc,
+    fxindexmap, fxindexset, trace::TraceRawVcs, Completion, FxIndexSet, ResolvedVc, TryJoinIterExt,
+    Value, ValueToString, Vc,
 };
 use turbo_tasks_env::{CustomProcessEnv, ProcessEnv};
 use turbo_tasks_fs::{File, FileContent, FileSystemPath};
@@ -1237,7 +1237,6 @@ impl AppEndpoint {
                 let mut file_paths_from_root = vec![
                     "server/server-reference-manifest.js".into(),
                     "server/middleware-build-manifest.js".into(),
-                    "server/middleware-react-loadable-manifest.js".into(),
                     "server/next-font-manifest.js".into(),
                     "server/interception-route-rewrite-manifest.js".into(),
                 ];
@@ -1337,13 +1336,14 @@ impl AppEndpoint {
                         client_relative_path,
                         node_root.join(
                             format!(
-                                "server/app{}/react-loadable-manifest.json",
+                                "server/app{}/react-loadable-manifest",
                                 &app_entry.original_name
                             )
                             .into(),
                         ),
+                        NextRuntime::Edge,
                     );
-                    server_assets.insert(loadable_manifest_output.to_resolved().await?);
+                    server_assets.extend(loadable_manifest_output.await?.iter().copied());
                 }
 
                 AppEndpointOutput::Edge {
@@ -1393,13 +1393,14 @@ impl AppEndpoint {
                         client_relative_path,
                         node_root.join(
                             format!(
-                                "server/app{}/react-loadable-manifest.json",
+                                "server/app{}/react-loadable-manifest",
                                 &app_entry.original_name
                             )
                             .into(),
                         ),
+                        NextRuntime::NodeJs,
                     );
-                    server_assets.insert(loadable_manifest_output.to_resolved().await?);
+                    server_assets.extend(loadable_manifest_output.await?.iter().copied());
                 }
 
                 if this

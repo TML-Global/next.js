@@ -151,6 +151,8 @@ async function loadComponentsImpl<N = any>({
   // Make sure to avoid loading the manifest for metadata route handlers.
   const hasClientManifest = isAppPath && !isMetadataRoute(page)
 
+  let pageEscaped = page.replace(/%5F/g, '_')
+
   // Load the manifest files first
   const [
     buildManifest,
@@ -161,7 +163,15 @@ async function loadComponentsImpl<N = any>({
   ] = await Promise.all([
     loadManifestWithRetries<BuildManifest>(join(distDir, BUILD_MANIFEST)),
     loadManifestWithRetries<ReactLoadableManifest>(
-      join(distDir, REACT_LOADABLE_MANIFEST)
+      process.env.TURBOPACK
+        ? join(
+            distDir,
+            'server',
+            isAppPath ? 'app' : 'pages',
+            pageEscaped,
+            REACT_LOADABLE_MANIFEST
+          )
+        : join(distDir, REACT_LOADABLE_MANIFEST)
     ),
     // This manifest will only exist in Pages dir && Production && Webpack.
     isAppPath || process.env.TURBOPACK
@@ -175,9 +185,9 @@ async function loadComponentsImpl<N = any>({
             distDir,
             'server',
             'app',
-            page.replace(/%5F/g, '_') + '_' + CLIENT_REFERENCE_MANIFEST + '.js'
+            pageEscaped + '_' + CLIENT_REFERENCE_MANIFEST + '.js'
           ),
-          page.replace(/%5F/g, '_')
+          pageEscaped
         )
       : undefined,
     isAppPath

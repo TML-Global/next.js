@@ -1032,16 +1032,17 @@ impl PageEndpoint {
     async fn react_loadable_manifest(
         &self,
         dynamic_import_entries: Vc<DynamicImportedChunks>,
-    ) -> Result<Vc<Box<dyn OutputAsset>>> {
+        runtime: NextRuntime,
+    ) -> Result<Vc<OutputAssets>> {
         let node_root = self.pages_project.project().node_root();
         let client_relative_path = self.pages_project.project().client_relative_path();
         let loadable_path_prefix = get_asset_prefix_from_pathname(&self.pathname.await?);
         Ok(create_react_loadable_manifest(
             dynamic_import_entries,
             client_relative_path,
-            node_root.join(
-                format!("server/pages{loadable_path_prefix}/react-loadable-manifest.json").into(),
-            ),
+            node_root
+                .join(format!("server/pages{loadable_path_prefix}/react-loadable-manifest").into()),
+            runtime,
         ))
     }
 
@@ -1153,8 +1154,8 @@ impl PageEndpoint {
                     server_assets.push(pages_manifest);
 
                     let loadable_manifest_output =
-                        self.react_loadable_manifest(*dynamic_import_entries);
-                    server_assets.push(loadable_manifest_output.to_resolved().await?);
+                        self.react_loadable_manifest(*dynamic_import_entries, NextRuntime::NodeJs);
+                    server_assets.extend(loadable_manifest_output.await?.iter().copied());
                 }
 
                 PageEndpointOutput::NodeJs {
@@ -1175,6 +1176,10 @@ impl PageEndpoint {
                         server_assets.push(pages_manifest);
                     }
                     server_assets.extend(files_value.iter().copied());
+
+                    let loadable_manifest_output =
+                        self.react_loadable_manifest(*dynamic_import_entries, NextRuntime::Edge);
+                    server_assets.extend(loadable_manifest_output.await?.iter().copied());
 
                     // the next-edge-ssr-loader templates expect the manifests to be stored in
                     // global variables defined in these files
@@ -1244,10 +1249,6 @@ impl PageEndpoint {
                     .await?;
                     server_assets.push(ResolvedVc::upcast(middleware_manifest_v2));
                 }
-
-                let loadable_manifest_output =
-                    self.react_loadable_manifest(*dynamic_import_entries);
-                server_assets.push(loadable_manifest_output.to_resolved().await?);
 
                 PageEndpointOutput::Edge {
                     files,
