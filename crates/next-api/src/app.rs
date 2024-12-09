@@ -1323,10 +1323,6 @@ impl AppEndpoint {
                         if let (Some(next_dynamic_imports), Some(client_references_chunks)) =
                             (next_dynamic_imports, client_references_chunks)
                         {
-                            println!(
-                                "client_references_chunks: {:?}",
-                                client_references_chunks.dbg().await?
-                            );
                             collect_next_dynamic_chunks(
                                 Vc::upcast(client_chunking_context),
                                 &next_dynamic_imports,

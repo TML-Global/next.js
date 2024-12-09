@@ -11,7 +11,7 @@ use next_core::{
     mode::NextMode,
     next_client_reference::{
         find_server_entries, ClientReference, ClientReferenceGraphResult, ClientReferenceType,
-        EcmascriptClientReferenceModule, ServerEntries, VisitedClientReferenceGraphNodes,
+        ServerEntries, VisitedClientReferenceGraphNodes,
     },
     next_dynamic::NextDynamicEntryModule,
     next_manifests::ActionLayer,
@@ -40,9 +40,7 @@ use turbopack_core::{
 
 use crate::{
     client_references::{map_client_references, ClientReferenceMapType, ClientReferencesSet},
-    dynamic_imports::{
-        map_next_dynamic, DynamicImportEntries, DynamicImportEntriesMapType, DynamicImports,
-    },
+    dynamic_imports::{map_next_dynamic, DynamicImportEntries, DynamicImportEntriesMapType},
     project::Project,
     server_actions::{map_server_actions, to_rsc_context, AllActions, AllModuleActions},
 };
@@ -267,16 +265,6 @@ impl SingleModuleGraph {
                         layer,
                         ident: _,
                     } => {
-                        // println!(
-                        //     "parent: {:?}, current: {:?}",
-                        //     match &parent {
-                        //         Some(SingleModuleGraphBuilderNode::Module { ident, .. }) =>
-                        //             ident.to_string(),
-                        //         _ => "".to_string(),
-                        //     },
-                        //     ident
-                        // );
-
                         if let Some(idx) = modules.get(&module) {
                             if let Some(parent_idx) = parent_idx {
                                 graph.add_edge(parent_idx, *idx, ());
@@ -920,7 +908,8 @@ pub struct ReducedGraphs {
 
 #[turbo_tasks::value_impl]
 impl ReducedGraphs {
-    /// Returns the dynamic imports in RSC and SSR modules for the given endpoint.
+    /// Returns the next/dynamic-ally imported (client) modules (from RSC and SSR modules) for the
+    /// given endpoint.
     #[turbo_tasks::function]
     pub async fn get_next_dynamic_imports_for_endpoint(
         &self,
