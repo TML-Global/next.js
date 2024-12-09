@@ -3,13 +3,10 @@ use std::collections::HashMap;
 use anyhow::Result;
 use next_core::next_manifests::LoadableManifest;
 use turbo_rcstr::RcStr;
-use turbo_tasks::{ResolvedVc, TryFlatJoinIterExt, ValueToString, Vc};
+use turbo_tasks::{TryFlatJoinIterExt, ValueToString, Vc};
 use turbo_tasks_fs::{File, FileContent, FileSystemPath};
 use turbopack_core::{
-    asset::AssetContent,
-    module::Module,
-    output::{OutputAsset, OutputAssets},
-    virtual_output::VirtualOutputAsset,
+    asset::AssetContent, output::OutputAsset, virtual_output::VirtualOutputAsset,
 };
 
 use crate::dynamic_imports::DynamicImportedChunks;
@@ -19,15 +16,13 @@ pub async fn create_react_loadable_manifest(
     dynamic_import_entries: Vc<DynamicImportedChunks>,
     client_relative_path: Vc<FileSystemPath>,
     output_path: Vc<FileSystemPath>,
-) -> Result<Vc<OutputAssets>> {
+) -> Result<Vc<Box<dyn OutputAsset>>> {
     let dynamic_import_entries = &*dynamic_import_entries.await?;
 
-    let mut output = vec![];
     let mut loadable_manifest: HashMap<RcStr, LoadableManifest> = Default::default();
 
     for (_, (module_id, chunk_output)) in dynamic_import_entries.into_iter() {
         let chunk_output = chunk_output.await?;
-        output.extend(chunk_output.iter().copied());
 
         let id = module_id.to_string().await?.clone_value();
 
@@ -61,10 +56,7 @@ pub async fn create_react_loadable_manifest(
             )?))
             .cell(),
         ),
-    )
-    .to_resolved()
-    .await?;
+    );
 
-    output.push(ResolvedVc::upcast(loadable_manifest));
-    Ok(Vc::cell(output))
+    Ok(Vc::upcast(loadable_manifest))
 }

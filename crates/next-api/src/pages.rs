@@ -63,7 +63,7 @@ use turbopack_ecmascript::resolve::esm_resolve;
 use turbopack_nodejs::NodeJsChunkingContext;
 
 use crate::{
-    dynamic_imports::{collect_chunk_group, collect_evaluated_chunk_group, DynamicImportedChunks},
+    dynamic_imports::{collect_next_dynamic_chunks, DynamicImportedChunks},
     font::create_font_manifest,
     loadable_manifest::create_react_loadable_manifest,
     module_graph::get_reduced_graphs_for_endpoint,
@@ -875,9 +875,10 @@ impl PageEndpoint {
 
                 let client_chunking_context =
                     this.pages_project.project().client_chunking_context();
-                let dynamic_import_entries = collect_evaluated_chunk_group(
+                let dynamic_import_entries = collect_next_dynamic_chunks(
                     Vc::upcast(client_chunking_context),
                     &next_dynamic_imports,
+                    None,
                 )
                 .await?
                 .to_resolved()
@@ -910,10 +911,10 @@ impl PageEndpoint {
 
                 let client_chunking_context =
                     this.pages_project.project().client_chunking_context();
-                let dynamic_import_entries = collect_chunk_group(
+                let dynamic_import_entries = collect_next_dynamic_chunks(
                     Vc::upcast(client_chunking_context),
                     &next_dynamic_imports,
-                    Value::new(AvailabilityInfo::Root),
+                    None,
                 )
                 .await?
                 .to_resolved()
@@ -1031,7 +1032,7 @@ impl PageEndpoint {
     async fn react_loadable_manifest(
         &self,
         dynamic_import_entries: Vc<DynamicImportedChunks>,
-    ) -> Result<Vc<OutputAssets>> {
+    ) -> Result<Vc<Box<dyn OutputAsset>>> {
         let node_root = self.pages_project.project().node_root();
         let client_relative_path = self.pages_project.project().client_relative_path();
         let loadable_path_prefix = get_asset_prefix_from_pathname(&self.pathname.await?);
@@ -1153,7 +1154,7 @@ impl PageEndpoint {
 
                     let loadable_manifest_output =
                         self.react_loadable_manifest(*dynamic_import_entries);
-                    server_assets.extend(loadable_manifest_output.await?.iter().copied());
+                    server_assets.push(loadable_manifest_output.to_resolved().await?);
                 }
 
                 PageEndpointOutput::NodeJs {
@@ -1246,7 +1247,7 @@ impl PageEndpoint {
 
                 let loadable_manifest_output =
                     self.react_loadable_manifest(*dynamic_import_entries);
-                server_assets.extend(loadable_manifest_output.await?.iter().copied());
+                server_assets.push(loadable_manifest_output.to_resolved().await?);
 
                 PageEndpointOutput::Edge {
                     files,

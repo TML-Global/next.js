@@ -1,20 +1,29 @@
 use anyhow::Result;
 use futures::Future;
-use next_core::next_dynamic::NextDynamicEntryModule;
+use next_core::{
+    next_app::ClientReferencesChunks,
+    next_client_reference::{ClientReferenceType, EcmascriptClientReferenceModule},
+    next_dynamic::NextDynamicEntryModule,
+};
+use serde::{Deserialize, Serialize};
 use swc_core::ecma::{
     ast::{CallExpr, Callee, Expr, Ident, Lit},
     visit::{Visit, VisitWith},
 };
 use turbo_rcstr::RcStr;
-use turbo_tasks::{FxIndexMap, ResolvedVc, TryFlatJoinIterExt, Value, Vc};
+use turbo_tasks::{
+    debug::ValueDebugFormat, trace::TraceRawVcs, FxIndexMap, ResolvedVc, TryFlatJoinIterExt,
+    TryJoinIterExt, Value, Vc,
+};
 use turbopack_core::{
     chunk::{
-        availability_info::AvailabilityInfo, ChunkItemExt, ChunkableModule, ChunkingContext,
-        ChunkingContextExt, EvaluatableAsset, ModuleId,
+        availability_info::AvailabilityInfo, ChunkItem, ChunkItemExt, ChunkableModule,
+        ChunkingContext, ModuleId,
     },
     context::AssetContext,
     module::Module,
-    output::OutputAssets,
+    output::{OutputAsset, OutputAssets},
+    reference::ModuleReference,
     reference_type::EcmaScriptModulesReferenceSubType,
     resolve::{origin::PlainResolveOrigin, parse::Request, pattern::Pattern},
 };
@@ -22,89 +31,61 @@ use turbopack_ecmascript::{parse::ParseResult, resolve::esm_resolve, EcmascriptP
 
 use crate::module_graph::SingleModuleGraph;
 
-async fn collect_chunk_group_inner<F, Fu>(
+pub(crate) async fn collect_next_dynamic_chunks(
     chunking_context: Vc<Box<dyn ChunkingContext>>,
-    dynamic_import_entries: &FxIndexMap<
-        ResolvedVc<Box<dyn Module>>,
+    dynamic_import_entries: &[(
         ResolvedVc<NextDynamicEntryModule>,
-    >,
-    mut build_chunk: F,
-) -> Result<Vc<DynamicImportedChunks>>
-where
-    F: FnMut(Vc<Box<dyn ChunkableModule>>) -> Fu,
-    Fu: Future<Output = Result<Vc<OutputAssets>>> + Send,
-{
-    let mut dynamic_import_chunks = FxIndexMap::default();
-
-    // Iterate over the collected import mappings, and create a chunk for each
-    // dynamic import.
-
-    // TODO
-    // ast-grep-ignore: to-resolved-in-loop
-    for (_, imported_module) in dynamic_import_entries {
-        let module = ResolvedVc::upcast::<Box<dyn ChunkableModule>>(*imported_module);
-
-        // [Note]: this seems to create duplicated chunks for the same module to the original import() call
-        // and the explicit chunk we ask in here. So there'll be at least 2
-        // chunks for the same module, relying on
-        // naive hash to have additional
-        // chunks in case if there are same modules being imported in different
-        // origins.
-        let chunk_group = build_chunk(*module).await?.to_resolved().await?;
-
-        let module_id = imported_module
-            .as_chunk_item(Vc::upcast(chunking_context))
-            .id()
-            .to_resolved()
-            .await?;
-
-        dynamic_import_chunks.insert(*imported_module, (module_id, chunk_group));
-    }
-
-    Ok(Vc::cell(dynamic_import_chunks))
-}
-
-pub(crate) async fn collect_chunk_group(
-    chunking_context: Vc<Box<dyn ChunkingContext>>,
-    dynamic_import_entries: &FxIndexMap<
-        ResolvedVc<Box<dyn Module>>,
-        ResolvedVc<NextDynamicEntryModule>,
-    >,
-    availability_info: Value<AvailabilityInfo>,
+        Option<ClientReferenceType>,
+    )],
+    client_reference_chunks: Option<&ClientReferencesChunks>,
 ) -> Result<Vc<DynamicImportedChunks>> {
-    collect_chunk_group_inner(
-        chunking_context,
-        dynamic_import_entries,
-        |module| async move { Ok(chunking_context.chunk_group_assets(module, availability_info)) },
-    )
-    .await
-}
+    let dynamic_import_chunks = dynamic_import_entries
+        .iter()
+        .map(|(dynamic_entry, parent_client_reference)| async move {
+            let module = ResolvedVc::upcast::<Box<dyn ChunkableModule>>(*dynamic_entry);
 
-pub(crate) async fn collect_evaluated_chunk_group(
-    chunking_context: Vc<Box<dyn ChunkingContext>>,
-    dynamic_import_entries: &FxIndexMap<
-        ResolvedVc<Box<dyn Module>>,
-        ResolvedVc<NextDynamicEntryModule>,
-    >,
-) -> Result<Vc<DynamicImportedChunks>> {
-    collect_chunk_group_inner(
-        chunking_context,
-        dynamic_import_entries,
-        |module| async move {
-            if let Some(module) =
-                Vc::try_resolve_downcast::<Box<dyn EvaluatableAsset>>(module).await?
-            {
-                Ok(chunking_context.evaluated_chunk_group_assets(
-                    module.ident(),
-                    Vc::cell(vec![ResolvedVc::upcast(module.to_resolved().await?)]),
-                    Value::new(AvailabilityInfo::Root),
-                ))
+            // This is the availability info for the parent chunk group, i.e. the client reference
+            // containing the next/dynamic imports
+            let availability_info = if let Some(parent_client_reference) = parent_client_reference {
+                client_reference_chunks
+                    .unwrap()
+                    .client_component_client_chunks
+                    .get(parent_client_reference)
+                    .unwrap()
+                    .1
             } else {
-                Ok(chunking_context.chunk_group_assets(module, Value::new(AvailabilityInfo::Root)))
-            }
-        },
-    )
-    .await
+                // In pages router, there are no parent_client_reference and no
+                // client_reference_chunks
+                AvailabilityInfo::Root
+            };
+
+            let async_loader =
+                chunking_context.async_loader_chunk_item(*module, Value::new(availability_info));
+            let async_chunk_group = async_loader
+                .references()
+                .await?
+                .iter()
+                .map(|reference| reference.resolve_reference().primary_output_assets())
+                .try_join()
+                .await?;
+            let async_chunk_group: Vec<ResolvedVc<Box<dyn OutputAsset>>> =
+                async_chunk_group.iter().flatten().copied().collect();
+
+            let module_id = dynamic_entry
+                .as_chunk_item(Vc::upcast(chunking_context))
+                .id()
+                .to_resolved()
+                .await?;
+
+            Ok((
+                *dynamic_entry,
+                (module_id, ResolvedVc::cell(async_chunk_group)),
+            ))
+        })
+        .try_join()
+        .await?;
+
+    Ok(Vc::cell(FxIndexMap::from_iter(dynamic_import_chunks)))
 }
 
 /// Returns a mapping of the dynamic imports for the module, if the import is
@@ -275,6 +256,7 @@ pub struct DynamicImportsMap(pub (ResolvedVc<Box<dyn Module>>, DynamicImportedMo
 pub struct OptionDynamicImportsMap(Option<ResolvedVc<DynamicImportsMap>>);
 
 #[turbo_tasks::value(transparent)]
+#[derive(Default)]
 pub struct DynamicImportedChunks(
     pub  FxIndexMap<
         ResolvedVc<NextDynamicEntryModule>,
@@ -287,9 +269,15 @@ pub struct DynamicImportedChunks(
 #[turbo_tasks::value(transparent)]
 pub struct DynamicImports(pub FxIndexMap<ResolvedVc<Box<dyn Module>>, DynamicImportedModules>);
 
+#[derive(Clone, PartialEq, Eq, ValueDebugFormat, Serialize, Deserialize, TraceRawVcs)]
+pub enum DynamicImportEntriesMapType {
+    DynamicEntry(ResolvedVc<NextDynamicEntryModule>),
+    ClientReference(ResolvedVc<EcmascriptClientReferenceModule>),
+}
+
 #[turbo_tasks::value(transparent)]
 pub struct DynamicImportEntries(
-    pub FxIndexMap<ResolvedVc<Box<dyn Module>>, ResolvedVc<NextDynamicEntryModule>>,
+    pub FxIndexMap<ResolvedVc<Box<dyn Module>>, DynamicImportEntriesMapType>,
 );
 
 #[turbo_tasks::function]
@@ -298,17 +286,29 @@ pub async fn map_next_dynamic(graph: Vc<SingleModuleGraph>) -> Result<Vc<Dynamic
         .await?
         .enumerate_nodes()
         .map(|(_, node)| async move {
-            if node
-                .layer
-                .as_ref()
-                .is_some_and(|layer| &**layer == "app-client" || &**layer == "client")
-            {
+            let module = node.module;
+            let layer = node.layer.as_ref();
+            if layer.is_some_and(|layer| &**layer == "app-client" || &**layer == "client") {
                 if let Some(dynamic_entry_module) =
-                    ResolvedVc::try_downcast_type::<NextDynamicEntryModule>(node.module).await?
+                    ResolvedVc::try_downcast_type::<NextDynamicEntryModule>(module).await?
                 {
-                    return Ok(Some((node.module, dynamic_entry_module)));
+                    return Ok(Some((
+                        module,
+                        DynamicImportEntriesMapType::DynamicEntry(dynamic_entry_module),
+                    )));
                 }
             }
+            // TODO add this check once these modules have the correct layer
+            // if layer.is_some_and(|layer| &**layer == "app-rsc") {
+            if let Some(client_reference_module) =
+                ResolvedVc::try_downcast_type::<EcmascriptClientReferenceModule>(module).await?
+            {
+                return Ok(Some((
+                    module,
+                    DynamicImportEntriesMapType::ClientReference(client_reference_module),
+                )));
+            }
+            // }
             Ok(None)
         })
         .try_flat_join()

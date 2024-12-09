@@ -11,8 +11,9 @@ use next_core::{
     mode::NextMode,
     next_client_reference::{
         find_server_entries, ClientReference, ClientReferenceGraphResult, ClientReferenceType,
-        ServerEntries, VisitedClientReferenceGraphNodes,
+        EcmascriptClientReferenceModule, ServerEntries, VisitedClientReferenceGraphNodes,
     },
+    next_dynamic::NextDynamicEntryModule,
     next_manifests::ActionLayer,
 };
 use petgraph::{
@@ -39,7 +40,9 @@ use turbopack_core::{
 
 use crate::{
     client_references::{map_client_references, ClientReferenceMapType, ClientReferencesSet},
-    dynamic_imports::{map_next_dynamic, DynamicImportEntries, DynamicImports},
+    dynamic_imports::{
+        map_next_dynamic, DynamicImportEntries, DynamicImportEntriesMapType, DynamicImports,
+    },
     project::Project,
     server_actions::{map_server_actions, to_rsc_context, AllActions, AllModuleActions},
 };
@@ -563,6 +566,14 @@ pub struct NextDynamicGraph {
     data: ResolvedVc<DynamicImportEntries>,
 }
 
+#[turbo_tasks::value(transparent)]
+pub struct DynamicImportEntriesWithImporter(
+    pub  Vec<(
+        ResolvedVc<NextDynamicEntryModule>,
+        Option<ClientReferenceType>,
+    )>,
+);
+
 #[turbo_tasks::value_impl]
 impl NextDynamicGraph {
     #[turbo_tasks::function]
@@ -608,25 +619,71 @@ impl NextDynamicGraph {
     pub async fn get_next_dynamic_imports_for_endpoint(
         &self,
         entry: ResolvedVc<Box<dyn Module>>,
-    ) -> Result<Vc<DynamicImportEntries>> {
+    ) -> Result<Vc<DynamicImportEntriesWithImporter>> {
         let span = tracing::info_span!("collect next/dynamic imports for endpoint");
         async move {
-            if self.is_single_page {
-                // The graph contains the endpoint (= `entry`) only, no need to filter.
-                Ok(*self.data)
-            } else {
-                // The graph contains the whole app, traverse and collect all reachable imports.
-                let graph = &*self.graph.await?;
-                let data = &self.data.await?;
+            let data = &*self.data.await?;
+            let graph = &*self.graph.await?;
 
-                let mut result = FxIndexMap::default();
-                graph.traverse_from_entry(entry, |node| {
-                    if let Some(node_data) = data.get(&node.module) {
-                        result.insert(node.module, *node_data);
-                    }
-                })?;
-                Ok(Vc::cell(result))
+            #[derive(Clone, PartialEq, Eq)]
+            enum VisitState {
+                Entry,
+                InClientReference(ClientReferenceType),
             }
+
+            let mut result = vec![];
+
+            // module -> the client reference entry (if any)
+            let mut state_map = HashMap::new();
+            graph.traverse_edges_from_entry(entry, |(parent_node, node)| {
+                let module = node.module;
+                let Some(parent_node) = parent_node else {
+                    state_map.insert(module, VisitState::Entry);
+                    return GraphTraversalAction::Continue;
+                };
+                let parent_module = parent_node.module;
+
+                let module_type = data.get(&module);
+                let parent_state = state_map.get(&parent_module).unwrap().clone();
+                let parent_client_reference =
+                    if let Some(DynamicImportEntriesMapType::ClientReference(module)) = module_type
+                    {
+                        Some(ClientReferenceType::EcmascriptClientReference {
+                            parent_module,
+                            module: *module,
+                        })
+                    } else if let VisitState::InClientReference(ty) = parent_state {
+                        Some(ty)
+                    } else {
+                        None
+                    };
+
+                match module_type {
+                    Some(DynamicImportEntriesMapType::DynamicEntry(dynamic_entry)) => {
+                        result.push((*dynamic_entry, parent_client_reference));
+
+                        state_map.insert(module, parent_state);
+                        GraphTraversalAction::Skip
+                    }
+                    Some(DynamicImportEntriesMapType::ClientReference(client_reference)) => {
+                        state_map.insert(
+                            module,
+                            VisitState::InClientReference(
+                                ClientReferenceType::EcmascriptClientReference {
+                                    parent_module,
+                                    module: *client_reference,
+                                },
+                            ),
+                        );
+                        GraphTraversalAction::Continue
+                    }
+                    None => {
+                        state_map.insert(module, parent_state);
+                        GraphTraversalAction::Continue
+                    }
+                }
+            })?;
+            Ok(Vc::cell(result))
         }
         .instrument(span)
         .await
@@ -868,7 +925,7 @@ impl ReducedGraphs {
     pub async fn get_next_dynamic_imports_for_endpoint(
         &self,
         entry: Vc<Box<dyn Module>>,
-    ) -> Result<Vc<DynamicImportEntries>> {
+    ) -> Result<Vc<DynamicImportEntriesWithImporter>> {
         let span = tracing::info_span!("collect all next/dynamic imports for endpoint");
         async move {
             if let [graph] = &self.next_dynamic[..] {
@@ -882,7 +939,7 @@ impl ReducedGraphs {
                         Ok(graph
                             .get_next_dynamic_imports_for_endpoint(entry)
                             .await?
-                            .iter()
+                            .into_iter()
                             .map(|(k, v)| (*k, *v))
                             // TODO remove this collect and return an iterator instead
                             .collect::<Vec<_>>())

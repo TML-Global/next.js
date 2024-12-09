@@ -38,8 +38,8 @@ use serde::{Deserialize, Serialize};
 use tracing::Instrument;
 use turbo_rcstr::RcStr;
 use turbo_tasks::{
-    fxindexmap, fxindexset, trace::TraceRawVcs, Completion, FxIndexSet, ResolvedVc, TryJoinIterExt,
-    Value, ValueToString, Vc,
+    debug::ValueDebug, fxindexmap, fxindexset, trace::TraceRawVcs, Completion, FxIndexSet,
+    ResolvedVc, TryJoinIterExt, Value, ValueToString, Vc,
 };
 use turbo_tasks_env::{CustomProcessEnv, ProcessEnv};
 use turbo_tasks_fs::{File, FileContent, FileSystemPath};
@@ -67,7 +67,7 @@ use turbopack_core::{
 use turbopack_ecmascript::resolve::cjs_resolve;
 
 use crate::{
-    dynamic_imports::{collect_chunk_group, collect_evaluated_chunk_group},
+    dynamic_imports::{collect_next_dynamic_chunks, DynamicImportedChunks},
     font::create_font_manifest,
     loadable_manifest::create_react_loadable_manifest,
     module_graph::get_reduced_graphs_for_endpoint,
@@ -1319,13 +1319,23 @@ impl AppEndpoint {
                             .await?;
                     server_assets.insert(app_paths_manifest_output);
 
-                    let dynamic_import_entries = collect_evaluated_chunk_group(
-                        Vc::upcast(client_chunking_context),
-                        next_dynamic_imports
-                            .as_deref()
-                            .unwrap_or(&Default::default()),
-                    )
-                    .await?;
+                    let dynamic_import_entries =
+                        if let (Some(next_dynamic_imports), Some(client_references_chunks)) =
+                            (next_dynamic_imports, client_references_chunks)
+                        {
+                            println!(
+                                "client_references_chunks: {:?}",
+                                client_references_chunks.dbg().await?
+                            );
+                            collect_next_dynamic_chunks(
+                                Vc::upcast(client_chunking_context),
+                                &next_dynamic_imports,
+                                Some(&*(client_references_chunks.await?)),
+                            )
+                            .await?
+                        } else {
+                            DynamicImportedChunks::default().cell()
+                        };
                     let loadable_manifest_output = create_react_loadable_manifest(
                         dynamic_import_entries,
                         client_relative_path,
@@ -1337,7 +1347,7 @@ impl AppEndpoint {
                             .into(),
                         ),
                     );
-                    server_assets.extend(loadable_manifest_output.await?.iter().copied());
+                    server_assets.insert(loadable_manifest_output.to_resolved().await?);
                 }
 
                 AppEndpointOutput::Edge {
@@ -1369,15 +1379,19 @@ impl AppEndpoint {
                     server_assets.insert(app_paths_manifest_output);
 
                     // create react-loadable-manifest for next/dynamic
-                    let availability_info = Value::new(AvailabilityInfo::Root);
-                    let dynamic_import_entries = collect_chunk_group(
-                        Vc::upcast(client_chunking_context),
-                        next_dynamic_imports
-                            .as_deref()
-                            .unwrap_or(&Default::default()),
-                        availability_info,
-                    )
-                    .await?;
+                    let dynamic_import_entries =
+                        if let (Some(next_dynamic_imports), Some(client_references_chunks)) =
+                            (next_dynamic_imports, client_references_chunks)
+                        {
+                            collect_next_dynamic_chunks(
+                                Vc::upcast(client_chunking_context),
+                                &next_dynamic_imports,
+                                Some(&*(client_references_chunks.await?)),
+                            )
+                            .await?
+                        } else {
+                            DynamicImportedChunks::default().cell()
+                        };
                     let loadable_manifest_output = create_react_loadable_manifest(
                         dynamic_import_entries,
                         client_relative_path,
@@ -1389,7 +1403,7 @@ impl AppEndpoint {
                             .into(),
                         ),
                     );
-                    server_assets.extend(loadable_manifest_output.await?.iter().copied());
+                    server_assets.insert(loadable_manifest_output.to_resolved().await?);
                 }
 
                 if this
