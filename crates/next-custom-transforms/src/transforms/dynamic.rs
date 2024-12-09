@@ -15,7 +15,7 @@ use swc_core::{
             PropName, PropOrSpread, Stmt, Str, Tpl, UnaryExpr, UnaryOp,
         },
         utils::{private_ident, quote_ident, ExprFactory},
-        visit::{fold_pass, Fold, FoldWith},
+        visit::{fold_pass, Fold, FoldWith, VisitMut, VisitMutWith},
     },
     quote,
 };
@@ -373,21 +373,10 @@ impl Fold for NextDynamicPatcher {
                             dynamic_transition_name,
                             ..
                         } => {
-                            let specifier =
-                                Expr::Lit(Lit::Str(dynamically_imported_specifier.clone().into()));
-                            let import_call = quote!(
-                                "import($specifier, {with: $with})" as Box<Expr>,
-                                specifier: Expr = specifier,
-                                with: Expr = with_transition(dynamic_transition_name).into(),
-                            );
-
-                            let import_callback = Expr::Arrow(ArrowExpr {
-                                params: vec![],
-                                body: Box::new(BlockStmtOrExpr::Expr(import_call)),
-                                ..Default::default()
-                            });
-
-                            expr.args[0] = import_callback.as_arg();
+                            let mut visitor = DynamicImportTransitionAdder {
+                                transition_name: dynamic_transition_name,
+                            };
+                            expr.args[0].visit_mut_with(&mut visitor);
                         }
                     }
 
@@ -408,6 +397,36 @@ impl Fold for NextDynamicPatcher {
             }
         }
         expr
+    }
+}
+
+struct DynamicImportTransitionAdder<'a> {
+    transition_name: &'a str,
+}
+impl VisitMut for DynamicImportTransitionAdder<'_> {
+    fn visit_mut_call_expr(&mut self, expr: &mut CallExpr) {
+        if let Callee::Import(..) = &expr.callee {
+            let options = ExprOrSpread {
+                expr: Box::new(
+                    ObjectLit {
+                        span: DUMMY_SP,
+                        props: vec![PropOrSpread::Prop(Box::new(Prop::KeyValue(KeyValueProp {
+                            key: PropName::Ident(IdentName::new("with".into(), DUMMY_SP)),
+                            value: with_transition(self.transition_name).into(),
+                        })))],
+                    }
+                    .into(),
+                ),
+                spread: None,
+            };
+
+            match expr.args.get_mut(1) {
+                Some(arg) => *arg = options,
+                None => expr.args.push(options),
+            }
+        } else {
+            expr.visit_mut_children_with(self);
+        }
     }
 }
 
