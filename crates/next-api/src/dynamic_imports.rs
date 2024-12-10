@@ -40,30 +40,37 @@ use turbopack_core::{
 
 use crate::module_graph::{DynamicImportEntriesWithImporter, SingleModuleGraph};
 
+pub(crate) enum NextDynamicChunkAvailability<'a> {
+    /// In App Router, the client references
+    ClientReferences(&'a ClientReferencesChunks),
+    /// In Pages Router, the base page chunk group
+    AvailabilityInfo(AvailabilityInfo),
+}
+
 pub(crate) async fn collect_next_dynamic_chunks(
     chunking_context: Vc<Box<dyn ChunkingContext>>,
-    dynamic_import_entries: Option<ReadRef<DynamicImportEntriesWithImporter>>,
-    client_reference_chunks: Option<&ClientReferencesChunks>,
-) -> Result<Vc<DynamicImportedChunks>> {
+    dynamic_import_entries: ReadRef<DynamicImportEntriesWithImporter>,
+    chunking_availability: NextDynamicChunkAvailability<'_>,
+) -> Result<ResolvedVc<DynamicImportedChunks>> {
+    let chunking_availability = &chunking_availability;
     let dynamic_import_chunks = dynamic_import_entries
         .iter()
-        .flat_map(|v| &**v)
         .map(|(dynamic_entry, parent_client_reference)| async move {
             let module = ResolvedVc::upcast::<Box<dyn ChunkableModule>>(*dynamic_entry);
 
             // This is the availability info for the parent chunk group, i.e. the client reference
             // containing the next/dynamic imports
-            let availability_info = if let Some(parent_client_reference) = parent_client_reference {
-                client_reference_chunks
-                    .unwrap()
-                    .client_component_client_chunks
-                    .get(parent_client_reference)
-                    .unwrap()
-                    .1
-            } else {
-                // In pages router, there are no parent_client_reference and no
-                // client_reference_chunks
-                AvailabilityInfo::Root
+            let availability_info = match chunking_availability {
+                NextDynamicChunkAvailability::ClientReferences(client_reference_chunks) => {
+                    client_reference_chunks
+                        .client_component_client_chunks
+                        .get(&parent_client_reference.unwrap())
+                        .unwrap()
+                        .1
+                }
+                NextDynamicChunkAvailability::AvailabilityInfo(availability_info) => {
+                    *availability_info
+                }
             };
 
             let async_loader =
@@ -92,7 +99,9 @@ pub(crate) async fn collect_next_dynamic_chunks(
         .try_join()
         .await?;
 
-    Ok(Vc::cell(FxIndexMap::from_iter(dynamic_import_chunks)))
+    Ok(ResolvedVc::cell(FxIndexMap::from_iter(
+        dynamic_import_chunks,
+    )))
 }
 
 #[turbo_tasks::value(transparent)]

@@ -67,7 +67,9 @@ use turbopack_core::{
 use turbopack_ecmascript::resolve::cjs_resolve;
 
 use crate::{
-    dynamic_imports::{collect_next_dynamic_chunks, DynamicImportedChunks},
+    dynamic_imports::{
+        collect_next_dynamic_chunks, DynamicImportedChunks, NextDynamicChunkAvailability,
+    },
     font::create_font_manifest,
     loadable_manifest::create_react_loadable_manifest,
     module_graph::get_reduced_graphs_for_endpoint,
@@ -1268,15 +1270,17 @@ impl AppEndpoint {
                         {
                             collect_next_dynamic_chunks(
                                 Vc::upcast(client_chunking_context),
-                                Some(next_dynamic_imports),
-                                Some(&*(client_references_chunks.await?)),
+                                next_dynamic_imports,
+                                NextDynamicChunkAvailability::ClientReferences(
+                                    &*(client_references_chunks.await?),
+                                ),
                             )
                             .await?
                         } else {
-                            DynamicImportedChunks::default().cell()
+                            DynamicImportedChunks::default().resolved_cell()
                         };
                     let loadable_manifest_output = create_react_loadable_manifest(
-                        dynamic_import_entries,
+                        *dynamic_import_entries,
                         client_relative_path,
                         node_root.join(
                             format!(
@@ -1385,15 +1389,17 @@ impl AppEndpoint {
                         {
                             collect_next_dynamic_chunks(
                                 Vc::upcast(client_chunking_context),
-                                Some(next_dynamic_imports),
-                                Some(&*(client_references_chunks.await?)),
+                                next_dynamic_imports,
+                                NextDynamicChunkAvailability::ClientReferences(
+                                    &*(client_references_chunks.await?),
+                                ),
                             )
                             .await?
                         } else {
-                            DynamicImportedChunks::default().cell()
+                            DynamicImportedChunks::default().resolved_cell()
                         };
                     let loadable_manifest_output = create_react_loadable_manifest(
-                        dynamic_import_entries,
+                        *dynamic_import_entries,
                         client_relative_path,
                         node_root.join(
                             format!(
