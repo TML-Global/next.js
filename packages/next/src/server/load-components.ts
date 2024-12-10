@@ -32,6 +32,7 @@ import { setReferenceManifestsSingleton } from './app-render/encryption-utils'
 import { createServerModuleMap } from './app-render/action-utils'
 import type { DeepReadonly } from '../shared/lib/deep-readonly'
 import { isMetadataRoute } from '../lib/metadata/is-metadata-route'
+import { normalizePagePath } from '../shared/lib/page-path/normalize-page-path'
 
 export type ManifestItem = {
   id: number | string
@@ -153,6 +154,29 @@ async function loadComponentsImpl<N = any>({
 
   let pageEscaped = page.replace(/%5F/g, '_')
 
+  let reactLoadableManifestPath
+  if (!process.env.TURBOPACK) {
+    reactLoadableManifestPath = join(distDir, REACT_LOADABLE_MANIFEST)
+  } else {
+    if (isAppPath) {
+      reactLoadableManifestPath = join(
+        distDir,
+        'server',
+        'app',
+        pageEscaped,
+        REACT_LOADABLE_MANIFEST
+      )
+    } else {
+      reactLoadableManifestPath = join(
+        distDir,
+        'server',
+        'pages',
+        normalizePagePath(page),
+        REACT_LOADABLE_MANIFEST
+      )
+    }
+  }
+
   // Load the manifest files first
   const [
     buildManifest,
@@ -162,17 +186,7 @@ async function loadComponentsImpl<N = any>({
     serverActionsManifest,
   ] = await Promise.all([
     loadManifestWithRetries<BuildManifest>(join(distDir, BUILD_MANIFEST)),
-    loadManifestWithRetries<ReactLoadableManifest>(
-      process.env.TURBOPACK
-        ? join(
-            distDir,
-            'server',
-            isAppPath ? 'app' : 'pages',
-            pageEscaped,
-            REACT_LOADABLE_MANIFEST
-          )
-        : join(distDir, REACT_LOADABLE_MANIFEST)
-    ),
+    loadManifestWithRetries<ReactLoadableManifest>(reactLoadableManifestPath),
     // This manifest will only exist in Pages dir && Production && Webpack.
     isAppPath || process.env.TURBOPACK
       ? undefined
