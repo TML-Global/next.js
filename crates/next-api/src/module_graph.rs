@@ -90,7 +90,7 @@ impl<N: TraceRawVcs, E: TraceRawVcs> Deref for TracedDiGraph<N, E> {
     }
 }
 
-#[turbo_tasks::value(cell = "new", eq = "manual", into = "new")]
+#[turbo_tasks::value(cell = "new", eq = "manual", into = "new", local)]
 #[derive(Clone, Default)]
 pub struct SingleModuleGraph {
     graph: TracedDiGraph<SingleModuleGraphNode, ()>,
