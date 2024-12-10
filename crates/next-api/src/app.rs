@@ -1262,6 +1262,37 @@ impl AppEndpoint {
                 let entry_file = "app-edge-has-no-entrypoint".into();
 
                 if emit_manifests {
+                    let dynamic_import_entries =
+                        if let (Some(next_dynamic_imports), Some(client_references_chunks)) =
+                            (next_dynamic_imports, client_references_chunks)
+                        {
+                            collect_next_dynamic_chunks(
+                                Vc::upcast(client_chunking_context),
+                                &next_dynamic_imports,
+                                Some(&*(client_references_chunks.await?)),
+                            )
+                            .await?
+                        } else {
+                            DynamicImportedChunks::default().cell()
+                        };
+                    let loadable_manifest_output = create_react_loadable_manifest(
+                        dynamic_import_entries,
+                        client_relative_path,
+                        node_root.join(
+                            format!(
+                                "server/app{}/react-loadable-manifest",
+                                &app_entry.original_name
+                            )
+                            .into(),
+                        ),
+                        NextRuntime::Edge,
+                    )
+                    .await?;
+                    server_assets.extend(loadable_manifest_output.iter().copied());
+                    file_paths_from_root.extend(
+                        get_js_paths_from_root(&node_root_value, &loadable_manifest_output).await?,
+                    );
+
                     // create middleware manifest
                     let named_regex = get_named_middleware_regex(&app_entry.pathname);
                     let matchers = MiddlewareMatcher {
@@ -1317,33 +1348,6 @@ impl AppEndpoint {
                         create_app_paths_manifest(node_root, &app_entry.original_name, entry_file)
                             .await?;
                     server_assets.insert(app_paths_manifest_output);
-
-                    let dynamic_import_entries =
-                        if let (Some(next_dynamic_imports), Some(client_references_chunks)) =
-                            (next_dynamic_imports, client_references_chunks)
-                        {
-                            collect_next_dynamic_chunks(
-                                Vc::upcast(client_chunking_context),
-                                &next_dynamic_imports,
-                                Some(&*(client_references_chunks.await?)),
-                            )
-                            .await?
-                        } else {
-                            DynamicImportedChunks::default().cell()
-                        };
-                    let loadable_manifest_output = create_react_loadable_manifest(
-                        dynamic_import_entries,
-                        client_relative_path,
-                        node_root.join(
-                            format!(
-                                "server/app{}/react-loadable-manifest",
-                                &app_entry.original_name
-                            )
-                            .into(),
-                        ),
-                        NextRuntime::Edge,
-                    );
-                    server_assets.extend(loadable_manifest_output.await?.iter().copied());
                 }
 
                 AppEndpointOutput::Edge {

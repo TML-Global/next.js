@@ -1177,9 +1177,10 @@ impl PageEndpoint {
                     }
                     server_assets.extend(files_value.iter().copied());
 
-                    let loadable_manifest_output =
-                        self.react_loadable_manifest(*dynamic_import_entries, NextRuntime::Edge);
-                    server_assets.extend(loadable_manifest_output.await?.iter().copied());
+                    let loadable_manifest_output = self
+                        .react_loadable_manifest(*dynamic_import_entries, NextRuntime::Edge)
+                        .await?;
+                    server_assets.extend(loadable_manifest_output.iter().copied());
 
                     // the next-edge-ssr-loader templates expect the manifests to be stored in
                     // global variables defined in these files
@@ -1188,12 +1189,15 @@ impl PageEndpoint {
                     let mut file_paths_from_root = vec![
                         "server/server-reference-manifest.js".into(),
                         "server/middleware-build-manifest.js".into(),
-                        "server/middleware-react-loadable-manifest.js".into(),
                         "server/next-font-manifest.js".into(),
                     ];
                     let mut wasm_paths_from_root = vec![];
 
                     let node_root_value = node_root.await?;
+
+                    file_paths_from_root.extend(
+                        get_js_paths_from_root(&node_root_value, &loadable_manifest_output).await?,
+                    );
 
                     file_paths_from_root
                         .extend(get_js_paths_from_root(&node_root_value, &files_value).await?);
