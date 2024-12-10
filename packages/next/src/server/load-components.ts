@@ -152,29 +152,25 @@ async function loadComponentsImpl<N = any>({
   // Make sure to avoid loading the manifest for metadata route handlers.
   const hasClientManifest = isAppPath && !isMetadataRoute(page)
 
-  let pageEscaped = page.replace(/%5F/g, '_')
-
   let reactLoadableManifestPath
   if (!process.env.TURBOPACK) {
     reactLoadableManifestPath = join(distDir, REACT_LOADABLE_MANIFEST)
+  } else if (isAppPath) {
+    reactLoadableManifestPath = join(
+      distDir,
+      'server',
+      'app',
+      page,
+      REACT_LOADABLE_MANIFEST
+    )
   } else {
-    if (isAppPath) {
-      reactLoadableManifestPath = join(
-        distDir,
-        'server',
-        'app',
-        pageEscaped,
-        REACT_LOADABLE_MANIFEST
-      )
-    } else {
-      reactLoadableManifestPath = join(
-        distDir,
-        'server',
-        'pages',
-        normalizePagePath(page),
-        REACT_LOADABLE_MANIFEST
-      )
-    }
+    reactLoadableManifestPath = join(
+      distDir,
+      'server',
+      'pages',
+      normalizePagePath(page),
+      REACT_LOADABLE_MANIFEST
+    )
   }
 
   // Load the manifest files first
@@ -199,9 +195,9 @@ async function loadComponentsImpl<N = any>({
             distDir,
             'server',
             'app',
-            pageEscaped + '_' + CLIENT_REFERENCE_MANIFEST + '.js'
+            page.replace(/%5F/g, '_') + '_' + CLIENT_REFERENCE_MANIFEST + '.js'
           ),
-          pageEscaped
+          page.replace(/%5F/g, '_')
         )
       : undefined,
     isAppPath

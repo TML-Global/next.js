@@ -20,14 +20,13 @@
 
 use anyhow::Result;
 use next_core::{
-    next_app::ClientReferencesChunks,
-    next_client_reference::{ClientReferenceType, EcmascriptClientReferenceModule},
+    next_app::ClientReferencesChunks, next_client_reference::EcmascriptClientReferenceModule,
     next_dynamic::NextDynamicEntryModule,
 };
 use serde::{Deserialize, Serialize};
 use turbo_tasks::{
-    debug::ValueDebugFormat, trace::TraceRawVcs, FxIndexMap, ResolvedVc, TryFlatJoinIterExt,
-    TryJoinIterExt, Value, Vc,
+    debug::ValueDebugFormat, trace::TraceRawVcs, FxIndexMap, ReadRef, ResolvedVc,
+    TryFlatJoinIterExt, TryJoinIterExt, Value, Vc,
 };
 use turbopack_core::{
     chunk::{
@@ -39,18 +38,16 @@ use turbopack_core::{
     reference::ModuleReference,
 };
 
-use crate::module_graph::SingleModuleGraph;
+use crate::module_graph::{DynamicImportEntriesWithImporter, SingleModuleGraph};
 
 pub(crate) async fn collect_next_dynamic_chunks(
     chunking_context: Vc<Box<dyn ChunkingContext>>,
-    dynamic_import_entries: &[(
-        ResolvedVc<NextDynamicEntryModule>,
-        Option<ClientReferenceType>,
-    )],
+    dynamic_import_entries: Option<ReadRef<DynamicImportEntriesWithImporter>>,
     client_reference_chunks: Option<&ClientReferencesChunks>,
 ) -> Result<Vc<DynamicImportedChunks>> {
     let dynamic_import_chunks = dynamic_import_entries
         .iter()
+        .flat_map(|v| &**v)
         .map(|(dynamic_entry, parent_client_reference)| async move {
             let module = ResolvedVc::upcast::<Box<dyn ChunkableModule>>(*dynamic_entry);
 

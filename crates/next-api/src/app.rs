@@ -1268,7 +1268,7 @@ impl AppEndpoint {
                         {
                             collect_next_dynamic_chunks(
                                 Vc::upcast(client_chunking_context),
-                                &next_dynamic_imports,
+                                Some(next_dynamic_imports),
                                 Some(&*(client_references_chunks.await?)),
                             )
                             .await?
@@ -1385,7 +1385,7 @@ impl AppEndpoint {
                         {
                             collect_next_dynamic_chunks(
                                 Vc::upcast(client_chunking_context),
-                                &next_dynamic_imports,
+                                Some(next_dynamic_imports),
                                 Some(&*(client_references_chunks.await?)),
                             )
                             .await?
